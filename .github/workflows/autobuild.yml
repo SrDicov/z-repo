@@ -92,6 +92,14 @@ jobs:
             echo "=== Building $pkg (x86_64) ==="
             sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || echo "FAIL $pkg"
           done
+          # Native builds put packages in hostdir/binpkgs/ (top level), not x86_64/
+          # Move them to x86_64/ for consistency
+          if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
+            echo "Moving native build packages to x86_64/"
+            mkdir -p z-packages/hostdir/binpkgs/x86_64
+            mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
+            mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
+          fi
           ls -lh z-packages/hostdir/binpkgs/x86_64/ 2>&1 | head -n 30
 
       - name: Sign packages & repodata (x86_64)
@@ -101,7 +109,7 @@ jobs:
           chmod 600 /tmp/rsa.pem
           if ls z-packages/hostdir/binpkgs/x86_64/*.xbps 1>/dev/null 2>&1; then
             for f in z-packages/hostdir/binpkgs/x86_64/*.xbps; do
-              if [ ! -f "$f.sig" ]; then
+              if [ ! -f "$f.sig2" ]; then
                 echo "Signing $f"
                 xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f" || echo "sign-pkg failed $f"
               else
