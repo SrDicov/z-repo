@@ -39,6 +39,7 @@ jobs:
           useradd -G xbuilder -M builder 2>/dev/null || true
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory '*'
+          git config --system --add safe.directory '*'
 
       - name: Checkout z-repo
         uses: actions/checkout@v4
@@ -56,7 +57,7 @@ jobs:
         run: |
           chown -R builder:builder . z-packages
           git config --global --add safe.directory '*'
-          sudo -Eu builder git config --global --add safe.directory '*'
+          git config --system --add safe.directory '*'
           sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64
           if [ -d x86_64 ]; then
             sudo -Eu builder bash -c 'cp -v x86_64/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || echo "no cache to sync"'
@@ -150,6 +151,7 @@ jobs:
           useradd -G xbuilder -M builder 2>/dev/null || true
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory '*'
+          git config --system --add safe.directory '*'
 
       - name: Fix Node for musl (fake Alpine)
         run: |
@@ -175,7 +177,7 @@ jobs:
         run: |
           chown -R builder:builder . z-packages
           git config --global --add safe.directory '*'
-          sudo -Eu builder git config --global --add safe.directory '*'
+          git config --system --add safe.directory '*'
           sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
           if [ -d x86_64-musl ]; then
             sudo -Eu builder bash -c 'cp -v x86_64-musl/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || echo "no musl cache"'
