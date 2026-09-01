@@ -56,14 +56,16 @@ jobs:
         run: |
           chown -R builder:builder . z-packages
           git config --global --add safe.directory '*'
-          mkdir -p z-packages/hostdir/binpkgs/x86_64
+          sudo -Eu builder git config --global --add safe.directory '*'
+          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64
           if [ -d x86_64 ]; then
-            cp -v x86_64/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || echo "no cache to sync"
-            cp -v x86_64/*-repodata* z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
+            sudo -Eu builder bash -c 'cp -v x86_64/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || echo "no cache to sync"'
+            sudo -Eu builder bash -c 'cp -v x86_64/*-repodata* z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true'
           fi
           sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
           sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
           ls -la z-packages/hostdir/binpkgs/x86_64/ 2>&1 | head -n 20
+          ls -ld z-packages/hostdir 2>&1 | head -n 5
 
       - name: Bootstrap x86_64
         run: |
@@ -149,6 +151,13 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory '*'
 
+      - name: Fix Node for musl (fake Alpine)
+        run: |
+          echo "Before:"; cat /etc/os-release | head -n 5
+          sed 's/^ID=.*/ID=alpine/' /etc/os-release > /tmp/os-release
+          cp /tmp/os-release /etc/os-release
+          echo "After:"; cat /etc/os-release | head -n 5
+
       - name: Checkout z-repo
         uses: actions/checkout@v4
         with:
@@ -166,14 +175,16 @@ jobs:
         run: |
           chown -R builder:builder . z-packages
           git config --global --add safe.directory '*'
-          mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
+          sudo -Eu builder git config --global --add safe.directory '*'
+          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
           if [ -d x86_64-musl ]; then
-            cp -v x86_64-musl/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || echo "no musl cache"
-            cp -v x86_64-musl/*-repodata* z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
+            sudo -Eu builder bash -c 'cp -v x86_64-musl/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || echo "no musl cache"'
+            sudo -Eu builder bash -c 'cp -v x86_64-musl/*-repodata* z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true'
           fi
           sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
           sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
           ls -la z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 20
+          ls -ld z-packages/hostdir 2>&1 | head -n 5
 
       - name: Bootstrap x86_64-musl
         run: |
