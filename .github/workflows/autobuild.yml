@@ -38,6 +38,7 @@ jobs:
           xbps-install -y sudo bash curl git perl tar xz 2>&1 | tail -n 10
           useradd -G xbuilder -M builder 2>/dev/null || true
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          git config --global --add safe.directory '*'
 
       - name: Checkout z-repo
         uses: actions/checkout@v4
@@ -54,14 +55,12 @@ jobs:
       - name: Prepare z-packages masterdir
         run: |
           chown -R builder:builder . z-packages
-          # ensure hostdir exists
+          git config --global --add safe.directory '*'
           mkdir -p z-packages/hostdir/binpkgs/x86_64
-          # sync cache: copy existing binpkgs from z-repo to avoid recompilar
           if [ -d x86_64 ]; then
             cp -v x86_64/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || echo "no cache to sync"
             cp -v x86_64/*-repodata* z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
           fi
-          # set mirror for bootstrap
           sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
           sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
           ls -la z-packages/hostdir/binpkgs/x86_64/ 2>&1 | head -n 20
@@ -73,7 +72,6 @@ jobs:
       - name: Build packages (glibc)
         run: |
           set -e
-          # lista automática de srcpkgs custom (todos los que existan en z-packages/srcpkgs)
           PKGS=$(ls z-packages/srcpkgs/)
           echo "Packages to build: $PKGS"
           for pkg in $PKGS; do
@@ -87,7 +85,6 @@ jobs:
           set -e
           echo "$XBPS_PRIVATE_KEY" > /tmp/rsa.pem
           chmod 600 /tmp/rsa.pem
-          # firmar paquetes nuevos (si no están firmados)
           if ls z-packages/hostdir/binpkgs/x86_64/*.xbps 1>/dev/null 2>&1; then
             for f in z-packages/hostdir/binpkgs/x86_64/*.xbps; do
               if [ ! -f "$f.sig" ]; then
@@ -97,7 +94,6 @@ jobs:
                 echo "Already signed $f"
               fi
             done
-            # regenerar índice y firmar
             xbps-rindex -a z-packages/hostdir/binpkgs/x86_64/*.xbps
             xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem z-packages/hostdir/binpkgs/x86_64
             ls -lh z-packages/hostdir/binpkgs/x86_64/ | head -n 20
@@ -112,20 +108,22 @@ jobs:
         run: |
           set -e
           mkdir -p x86_64
-          # copiar binpkgs firmados al repo
           if ls z-packages/hostdir/binpkgs/x86_64/* 1>/dev/null 2>&1; then
             cp -v z-packages/hostdir/binpkgs/x86_64/* x86_64/ 2>&1 | tail -n 20
+            chown -R builder:builder x86_64
           fi
-          # limpiar .gitkeep si ya hay paquetes
           if ls x86_64/*.xbps 1>/dev/null 2>&1; then rm -f x86_64/.gitkeep || true; fi
           ls -lh x86_64/ | head -n 20
-          git config user.name "Z-Linux-Bot"
-          git config user.email "SrDicov@gmail.com"
-          git add x86_64 keys 2>&1 | head -n 20
-          git diff --cached --quiet && echo "No changes for x86_64" && exit 0
-          git commit -m "chore: update x86_64 binpkgs [glibc] $(date -u +%Y%m%d%H%M)"
-          git pull --rebase 2>&1 | tail -n 10 || true
-          git push 2>&1 | tail -n 20
+          sudo -Eu builder bash -c '
+            set -e
+            git config user.name "Z-Linux-Bot"
+            git config user.email "SrDicov@gmail.com"
+            git add x86_64 keys
+            git diff --cached --quiet && echo "No changes for x86_64" && exit 0
+            git commit -m "chore: update x86_64 binpkgs [glibc] $(date -u +%Y%m%d%H%M)"
+            git pull --rebase || true
+            git push
+          ' 2>&1 | tail -n 30
 
   build-musl:
     name: Build x86_64-musl
@@ -149,6 +147,7 @@ jobs:
           xbps-install -y sudo bash curl git perl tar xz 2>&1 | tail -n 10
           useradd -G xbuilder -M builder 2>/dev/null || true
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          git config --global --add safe.directory '*'
 
       - name: Checkout z-repo
         uses: actions/checkout@v4
@@ -166,6 +165,7 @@ jobs:
       - name: Prepare z-packages masterdir (musl)
         run: |
           chown -R builder:builder . z-packages
+          git config --global --add safe.directory '*'
           mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
           if [ -d x86_64-musl ]; then
             cp -v x86_64-musl/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || echo "no musl cache"
@@ -189,10 +189,11 @@ jobs:
             sudo -Eu builder bash -c "cd z-packages && ./xbps-src -a x86_64-musl pkg $pkg 2>&1 | tail -n 100" || echo "FAIL musl $pkg"
           done
           ls -lh z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 30 || true
-          # fallback: if -a failed, try without -a (some templates are arch-independent)
-          if [ ! -f z-packages/hostdir/binpkgs/x86_64-musl/*.xbps ] 2>/dev/null; then
+          if ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
+            echo "musl build via -a succeeded"
+          else
+            echo "Retrying musl without -a fallback"
             for pkg in $PKGS; do
-              echo "Retrying $pkg without -a"
               sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 30" || true
               cp -v z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
             done
@@ -223,13 +224,17 @@ jobs:
           mkdir -p x86_64-musl
           if ls z-packages/hostdir/binpkgs/x86_64-musl/* 1>/dev/null 2>&1; then
             cp -v z-packages/hostdir/binpkgs/x86_64-musl/* x86_64-musl/ 2>&1 | tail -n 20
+            chown -R builder:builder x86_64-musl
           fi
           if ls x86_64-musl/*.xbps 1>/dev/null 2>&1; then rm -f x86_64-musl/.gitkeep || true; fi
           ls -lh x86_64-musl/ | head -n 20
-          git config user.name "Z-Linux-Bot"
-          git config user.email "SrDicov@gmail.com"
-          git add x86_64-musl keys 2>&1 | head -n 20
-          git diff --cached --quiet && echo "No changes for musl" && exit 0
-          git commit -m "chore: update x86_64-musl binpkgs $(date -u +%Y%m%d%H%M)"
-          git pull --rebase 2>&1 | tail -n 10 || true
-          git push 2>&1 | tail -n 20
+          sudo -Eu builder bash -c '
+            set -e
+            git config user.name "Z-Linux-Bot"
+            git config user.email "SrDicov@gmail.com"
+            git add x86_64-musl keys
+            git diff --cached --quiet && echo "No changes for musl" && exit 0
+            git commit -m "chore: update x86_64-musl binpkgs $(date -u +%Y%m%d%H%M)"
+            git pull --rebase || true
+            git push
+          ' 2>&1 | tail -n 30
