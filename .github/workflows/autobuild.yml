@@ -59,7 +59,7 @@ jobs:
         run: |
           rm -rf z-packages
           echo "Cloning z-packages shallow treeless..."
-          time git clone --filter=tree:0 --depth 1 https://github.com/SrDicov/z-packages.git z-packages
+          git clone --filter=tree:0 --depth 1 https://github.com/SrDicov/z-packages.git z-packages
           echo "z-packages srcpkgs:"
           ls z-packages/srcpkgs | head -n 20
           echo "commit: $(git -C z-packages rev-parse --short HEAD)"
@@ -190,7 +190,7 @@ jobs:
         run: |
           rm -rf z-packages
           echo "Cloning z-packages shallow treeless..."
-          time git clone --filter=tree:0 --depth 1 https://github.com/SrDicov/z-packages.git z-packages
+          git clone --filter=tree:0 --depth 1 https://github.com/SrDicov/z-packages.git z-packages
           echo "z-packages srcpkgs:"
           ls z-packages/srcpkgs | head -n 20
           echo "commit: $(git -C z-packages rev-parse --short HEAD)"
