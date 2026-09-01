@@ -41,6 +41,15 @@ jobs:
           git config --global --add safe.directory '*'
           git config --system --add safe.directory '*'
 
+      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
+        run: |
+          echo "Allowing unprivileged userns for xbps-uchroot..."
+          echo 0 | tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
+          sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "apparmor file not present"
+          cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo "unprivileged_userns_clone not present"
+
       - name: Checkout z-repo
         uses: actions/checkout@v4
         with:
@@ -159,6 +168,15 @@ jobs:
           sed 's/^ID=.*/ID=alpine/' /etc/os-release > /tmp/os-release
           cp /tmp/os-release /etc/os-release
           echo "After:"; cat /etc/os-release | head -n 5
+
+      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
+        run: |
+          echo "Allowing unprivileged userns for xbps-uchroot..."
+          echo 0 | tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
+          sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "apparmor file not present"
+          cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo "unprivileged_userns_clone not present"
 
       - name: Checkout z-repo
         uses: actions/checkout@v4
