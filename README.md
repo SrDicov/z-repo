@@ -25,10 +25,14 @@ mkdir -p "$ROOTFS/var/db/xbps/keys"
 curl -sL https://srdicov.github.io/z-repo/keys/zlinux-repo.pub -o "$ROOTFS/var/db/xbps/keys/zlinux-repo.pub"
 
 sudo ./mklive.sh \
+  -r https://github.com/SrDicov/z-repo/releases/download/librewolf-x86_64 \
   -r https://srdicov.github.io/z-repo/x86_64 \
   -r https://repo-default.voidlinux.org/current \
   -t x86_64-YYYYMMDD-labwc
 ```
+
+> `librewolf` (>100MB, GitHub no lo admite en git) vive en un repo
+> aparte servido como release asset; el resto está en `x86_64/`.
 
 ## Workflow
 El workflow `autobuild.yml` (en este repo) clona `SrDicov/z-packages`, compila solo paquetes desactualizados (`already built` skip), firma con `xbps-rindex` y publica aquí. Se dispara manualmente, por push y cada hora.

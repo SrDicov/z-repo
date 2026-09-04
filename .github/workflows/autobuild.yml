@@ -140,7 +140,77 @@ jobs:
         env:
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
 
+      - name: Split oversized pkgs to release-backed repo
+        shell: bash
+        run: |
+          set -e
+          set -o pipefail
+          echo "$XBPS_PRIVATE_KEY" > /tmp/rsa.pem
+          chmod 600 /tmp/rsa.pem
+          BRLWDIR=z-packages/hostdir/binpkgs/librewolf
+          mkdir -p "$BRLWDIR"
+          # GitHub rejects files >100MB in git; librewolf exceeds it.
+          # Ship such pkgs via release assets as a second XBPS repo.
+          moved=0
+          for f in z-packages/hostdir/binpkgs/x86_64/librewolf-*.xbps; do
+            [ -e "$f" ] || continue
+            mv "$f" "$BRLWDIR/"
+            [ -e "$f.sig2" ] && mv "$f.sig2" "$BRLWDIR/" || true
+            moved=1
+          done
+          if [ "$moved" = 1 ]; then
+            # rebuild main repodata without the moved pkgs
+            rm -f z-packages/hostdir/binpkgs/x86_64/*-repodata*
+            xbps-rindex -a z-packages/hostdir/binpkgs/x86_64/*.xbps
+            xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem z-packages/hostdir/binpkgs/x86_64
+            # librewolf-only repo
+            xbps-rindex -a "$BRLWDIR"/librewolf-*.xbps
+            xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem "$BRLWDIR"
+          else
+            echo "no oversized pkgs to split"
+          fi
+          ls -lh "$BRLWDIR" || true
+        env:
+          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
+
+      - name: Publish librewolf repo to GitHub release
+        shell: bash
+        run: |
+          set -e
+          set -o pipefail
+          xbps-install -Sy github-cli 2>&1 | tail -n 2
+          BRLWDIR=z-packages/hostdir/binpkgs/librewolf
+          TAG=librewolf-x86_64
+          if ! ls "$BRLWDIR"/librewolf-*.xbps 1>/dev/null 2>&1; then
+            echo "no librewolf packages, skipping release publish"
+            exit 0
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "LibreWolf x86_64 repo" \
+              --notes "Rolling XBPS repo for librewolf (too big for git)."
+          # drop stale versioned assets
+          for a in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
+            case "$a" in
+              x86_64-repodata) ;;
+              librewolf-*) [ -e "$BRLWDIR/$a" ] || gh release delete-asset "$TAG" "$a" -y ;;
+            esac
+          done
+          # upload new/changed assets only (same name+size = already there)
+          for f in "$BRLWDIR"/x86_64-repodata "$BRLWDIR"/librewolf-*.xbps*; do
+            [ -e "$f" ] || continue
+            n=$(basename "$f"); s=$(stat -c%s "$f")
+            rs=$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
+            if [ "$rs" = "$s" ]; then
+              echo "up to date: $n"
+            else
+              gh release upload "$TAG" --clobber "$f"
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Deploy to z-repo (x86_64)
+        shell: bash
         run: |
           set -e
           mkdir -p x86_64
@@ -288,6 +358,7 @@ jobs:
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
 
       - name: Deploy to z-repo (musl)
+        shell: bash
         run: |
           set -e
           mkdir -p x86_64-musl
