@@ -11,9 +11,8 @@ Repositorio binario XBPS para Z Linux, servido vía **GitHub Pages**.
 z-repo/
 ├── keys/zlinux-repo.pub
 ├── x86_64/              # glibc x86_64 (Intel/AMD)
-│   ├── x86_64-repodata
-│   ├── x86_64-repodata.sig
-│   └── *.xbps + *.xbps.sig
+│   ├── x86_64-repodata     # índice (firma embebida vía xbps-rindex --sign)
+│   └── *.xbps + *.xbps.sig2
 ├── x86_64-musl/         # musl x86_64
 │   ├── x86_64-musl-repodata
 │   └── ...
