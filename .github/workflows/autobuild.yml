@@ -92,9 +92,16 @@ jobs:
       - name: Build packages (glibc)
         run: |
           set -e
+          set -o pipefail
           PKGS=$(ls z-packages/srcpkgs/)
           echo "Packages to build: $PKGS"
           for pkg in $PKGS; do
+            # symlinked subpackage dirs (e.g. font-inter-variable)
+            # are built via their parent template: skip them here
+            if [ -L "z-packages/srcpkgs/$pkg" ]; then
+              echo "=== Skipping $pkg (symlink, built with parent) ==="
+              continue
+            fi
             echo "=== Building $pkg (x86_64) ==="
             sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || echo "FAIL $pkg"
           done
@@ -233,12 +240,27 @@ jobs:
       - name: Build packages (musl)
         run: |
           set -e
+          set -o pipefail
           PKGS=$(ls z-packages/srcpkgs/)
           echo "Packages to build (musl): $PKGS"
           for pkg in $PKGS; do
-            echo "=== Building $pkg (x86_64-musl) ==="
-            sudo -Eu builder bash -c "cd z-packages && ./xbps-src -a x86_64-musl pkg $pkg 2>&1 | tail -n 100" || echo "FAIL musl $pkg"
+            # symlinked subpackage dirs (e.g. font-inter-variable)
+            # are built via their parent template: skip them here
+            if [ -L "z-packages/srcpkgs/$pkg" ]; then
+              echo "=== Skipping $pkg (symlink, built with parent) ==="
+              continue
+            fi
+            echo "=== Building $pkg (x86_64-musl, native) ==="
+            sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || echo "FAIL musl $pkg"
           done
+          # Native builds put packages in hostdir/binpkgs/ (top level), not x86_64-musl/
+          # Move them to x86_64-musl/ for consistency
+          if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
+            echo "Moving native build packages to x86_64-musl/"
+            mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
+            mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
+            mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
+          fi
           ls -lh z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 30 || true
           if ! ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
             echo "ERROR: no musl packages built — failing instead of shipping stale/mislabeled binpkgs"
