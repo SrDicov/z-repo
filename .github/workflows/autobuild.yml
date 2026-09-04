@@ -3,6 +3,10 @@ name: Z Repo Autobuild
 on:
   push:
     branches: [master, main]
+    paths-ignore:
+      # bot binpkgs deploys must not retrigger a full rebuild
+      - 'x86_64/**'
+      - 'x86_64-musl/**'
   workflow_dispatch:
   schedule:
     - cron: '0 * * * *'  # poll z-packages cada hora
@@ -76,6 +80,8 @@ jobs:
           fi
           sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
           sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
+          # skip rebuild when the same version/revision is already in binpkgs
+          sudo -Eu builder bash -c 'cd z-packages && echo XBPS_PRESERVE_PKGS=yes >> etc/conf'
           ls -la z-packages/hostdir/binpkgs/x86_64/ 2>&1 | head -n 20
           ls -ld z-packages/hostdir 2>&1 | head -n 5
 
@@ -215,6 +221,8 @@ jobs:
           fi
           sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
           sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
+          # skip rebuild when the same version/revision is already in binpkgs
+          sudo -Eu builder bash -c 'cd z-packages && echo XBPS_PRESERVE_PKGS=yes >> etc/conf'
           ls -la z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 20
           ls -ld z-packages/hostdir 2>&1 | head -n 5
 
@@ -232,16 +240,10 @@ jobs:
             sudo -Eu builder bash -c "cd z-packages && ./xbps-src -a x86_64-musl pkg $pkg 2>&1 | tail -n 100" || echo "FAIL musl $pkg"
           done
           ls -lh z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 30 || true
-          if ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
-            echo "musl build via -a succeeded"
-          else
-            echo "Retrying musl without -a fallback"
-            for pkg in $PKGS; do
-              sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 30" || true
-              cp -v z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
-            done
+          if ! ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
+            echo "ERROR: no musl packages built — failing instead of shipping stale/mislabeled binpkgs"
+            exit 1
           fi
-          ls -lh z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 20 || true
 
       - name: Sign packages & repodata (musl)
         run: |
@@ -250,7 +252,7 @@ jobs:
           chmod 600 /tmp/rsa.pem
           if ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
             for f in z-packages/hostdir/binpkgs/x86_64-musl/*.xbps; do
-              [ -f "$f.sig" ] || xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f" || echo "sign musl failed $f"
+              [ -f "$f.sig2" ] || xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f" || echo "sign musl failed $f"
             done
             xbps-rindex -a z-packages/hostdir/binpkgs/x86_64-musl/*.xbps
             xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem z-packages/hostdir/binpkgs/x86_64-musl
