@@ -35,7 +35,11 @@ sudo ./mklive.sh \
 > aparte servido como release asset; el resto está en `x86_64/`.
 
 ## Workflow
-El workflow `autobuild.yml` (en este repo) clona `SrDicov/z-packages`, compila solo paquetes desactualizados (`already built` skip), firma con `xbps-rindex` y publica aquí. Se dispara manualmente, por push y cada hora.
+El workflow `autobuild.yml` (en este repo) clona `SrDicov/z-packages` y publica aquí. Se dispara manualmente, por push y cada hora. Para no recompilar lo que ya está publicado:
+- El job `check` (ligero, sin contenedor) compara cada template `srcpkgs/` con los binpkgs publicados (`.github/scripts/check_outdated.py`): solo pasan a build los paquetes nuevos o desactualizados. Los servidos vía releases (`RELEASE_PKGS`, hoy `librewolf`) se comparan contra los assets del release.
+- Cada arch compila solo su lista, en paralelo (`build-glibc` / `build-musl`).
+- Un paquete que falle marca el job en rojo (el siguiente run lo reintenta solo).
+- `workflow_dispatch` admite `force=true` para recompilarlo todo.
 
 ## Firma
 Paquetes e índices firmados con RSA (`xbps-rindex --sign`). La llave privada vive en `secrets.XBPS_PRIVATE_KEY` — nunca en git.
