@@ -179,7 +179,9 @@ jobs:
               continue
             fi
             echo "=== Building $pkg (x86_64) ==="
-            sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || { echo "FAIL $pkg"; failed="$failed $pkg"; }
+            # pipefail must live INSIDE bash -c: the | tail would otherwise
+            # mask xbps-src failures with tail's exit 0.
+            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || { echo "FAIL $pkg"; failed="$failed $pkg"; }
           done
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
           # Native builds put packages in hostdir/binpkgs/ (top level), not x86_64/
@@ -405,7 +407,7 @@ jobs:
               continue
             fi
             echo "=== Building $pkg (x86_64-musl, native) ==="
-            sudo -Eu builder bash -c "cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || { echo "FAIL musl $pkg"; failed="$failed $pkg"; }
+            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || { echo "FAIL musl $pkg"; failed="$failed $pkg"; }
           done
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
           # Native builds put packages in hostdir/binpkgs/ (top level), not x86_64-musl/
