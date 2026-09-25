@@ -297,7 +297,7 @@ jobs:
             chown -R builder:builder x86_64
           fi
           if ls x86_64/*.xbps 1>/dev/null 2>&1; then rm -f x86_64/.gitkeep || true; fi
-          ls -lh x86_64/ | head -n 20
+          ls -lh x86_64/ | head -n 20 || true # sin || true: pipefail+head = SIGPIPE 141
           sudo -Eu builder bash -c '
             set -e
             git config user.name "Z-Linux-Bot"
@@ -452,7 +452,7 @@ jobs:
             chown -R builder:builder x86_64-musl
           fi
           if ls x86_64-musl/*.xbps 1>/dev/null 2>&1; then rm -f x86_64-musl/.gitkeep || true; fi
-          ls -lh x86_64-musl/ | head -n 20
+          ls -lh x86_64-musl/ | head -n 20 || true # sin || true: pipefail+head = SIGPIPE 141
           sudo -Eu builder bash -c '
             set -e
             git config user.name "Z-Linux-Bot"
