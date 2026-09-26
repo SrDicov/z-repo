@@ -1,23 +1,12 @@
-# z-repo — Z Linux Binary Repository
+# z-repo — Z Linux Binary Repository (glibc)
 
-Repositorio binario XBPS para Z Linux, servido vía **GitHub Pages**.
+Repositorio binario XBPS para Z Linux (solo **glibc `x86_64`**), publicado
+como **assets del release `stable`** (modo repo-neko: nada en git).
+El gemelo musl vive en `z-repo-musl` (misma estructura, `x86_64-musl`).
 
-- **URL Pages:** `https://srdicov.github.io/z-repo/`
-- **Source repo:** `https://github.com/SrDicov/z-packages` (plantillas `srcpkgs/`)
-- **Llave pública:** `keys/zlinux-repo.pub`
-
-## Estructura
-```
-z-repo/
-├── keys/zlinux-repo.pub
-├── x86_64/              # glibc x86_64 (Intel/AMD)
-│   ├── x86_64-repodata     # índice (firma embebida vía xbps-rindex --sign)
-│   └── *.xbps + *.xbps.sig2
-├── x86_64-musl/         # musl x86_64
-│   ├── x86_64-musl-repodata
-│   └── ...
-└── .github/workflows/autobuild.yml
-```
+- **Repo XBPS:** `https://github.com/SrDicov/z-repo/releases/download/stable`
+- **Source repo (plantillas):** `https://github.com/SrDicov/z-packages` (`srcpkgs/`)
+- **Llave pública:** `keys/zlinux-repo.pub` (vía Pages)
 
 ## Uso en mklive.sh
 ```bash
@@ -25,22 +14,32 @@ mkdir -p "$ROOTFS/var/db/xbps/keys"
 curl -sL https://srdicov.github.io/z-repo/keys/zlinux-repo.pub -o "$ROOTFS/var/db/xbps/keys/zlinux-repo.pub"
 
 sudo ./mklive.sh \
-  -r https://github.com/SrDicov/z-repo/releases/download/librewolf-x86_64 \
-  -r https://srdicov.github.io/z-repo/x86_64 \
+  -r https://github.com/SrDicov/z-repo/releases/download/stable \
   -r https://repo-default.voidlinux.org/current \
   -t x86_64-YYYYMMDD-labwc
 ```
 
-> `librewolf` (>100MB, GitHub no lo admite en git) vive en un repo
-> aparte servido como release asset; el resto está en `x86_64/`.
-
 ## Workflow
-El workflow `autobuild.yml` (en este repo) clona `SrDicov/z-packages` y publica aquí. Se dispara manualmente, por push y cada hora. Para no recompilar lo que ya está publicado:
-- El job `check` (ligero, sin contenedor) compara cada template `srcpkgs/` con los binpkgs publicados (`.github/scripts/check_outdated.py`): solo pasan a build los paquetes nuevos o desactualizados. Los servidos vía releases (`RELEASE_PKGS`, hoy `librewolf`) se comparan contra los assets del release.
-- Cada arch compila solo su lista, en paralelo (`build-glibc` / `build-musl`).
-- Un paquete que falle marca el job en rojo (el siguiente run lo reintenta solo).
-- `workflow_dispatch` admite `force=true` para recompilarlo todo.
+`autobuild.yml`: `check` (ligero, sin contenedor) compara cada template
+`srcpkgs/` con los assets del release (`check_outdated.py --arch=x86_64`,
+sin descargar); `build` compila solo lo nuevo/desactualizado y publica.
+Sin duplicados: antes de firmar se conserva solo la versión más nueva de
+cada `pkgname` y se borran del release los assets viejos.
+
+Disparadores: diario (`0 3 * * *`), push a `.github/**`, `repository_dispatch`
+(`z-packages-update`) y manual con `packages=` (coma/espacio, vacío =
+auto-detectar), `sync_only=true` (solo re-firmar `repodata` y republicar)
+o `force=true` (todo).
+
+## Caché / velocidad
+Treeless shallow clone, sin `xbps-install -yu` completo (mirror `repo-ci`),
+`XBPS_PRESERVE_PKGS + CCACHE + MAKEJOBS=$(nproc)` y caché de
+`hostdir/sources` + `hostdir/ccache` entre runs.
 
 ## Firma
-Paquetes e índices firmados con RSA (`xbps-rindex --sign`). La llave privada vive en `secrets.XBPS_PRIVATE_KEY` — nunca en git.
+Paquetes e índices firmados con RSA (`xbps-rindex --sign`). La llave privada
+vive en `secrets.XBPS_PRIVATE_KEY` — nunca en git.
 
+## Migración desde git-commits
+Los `x86_64/*.xbps` viejos en git solo sirven como semilla de la primera
+publicación; tras ella: `git rm -r x86_64` (quedan `keys/` + docs).

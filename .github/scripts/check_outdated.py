@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decide which z-packages templates need (re)building per arch.
+"""Decide which z-packages templates need (re)building.
 
 Static template parsing only (never source them). For each real template
 dir in srcpkgs/ (symlinked dirs are built via their parent, like the
@@ -11,11 +11,18 @@ changes require a revision bump per repo rules).
 musl exclusion uses the standard idiom: a `broken=` assignment guarded by
 XBPS_TARGET_LIBC = musl.
 
-Usage: check_outdated.py <srcpkgs dir> <x86_64 list> <musl list>
-       [pkgname=release-asset-list ...]
-Prints `glibc:<pkgs>` / `musl:<pkgs>` lines (empty = all current).
-Packages shipped via GitHub releases (too big for git, e.g. librewolf)
-are compared against their release asset list instead of the repo tree.
+Usage (single-arch, release-based):
+    check_outdated.py <srcpkgs dir> <asset list> [--arch=x86_64]
+        [pkgname=release-asset-list ...]
+    Prints `pkgs:<pkgs>` (empty = all current).
+
+Usage (legacy dual-arch, git-tree based):
+    check_outdated.py <srcpkgs dir> <x86_64 list> <musl list>
+        [pkgname=release-asset-list ...]
+    Prints `glibc:<pkgs>` / `musl:<pkgs>` lines (empty = all current).
+Packages shipped via a dedicated GitHub release (too big for git,
+e.g. librewolf) are compared against their release asset list instead
+of the main pool via `pkgname=file` extras.
 """
 
 import fnmatch
@@ -62,29 +69,20 @@ def musl_broken(path):
     return False
 
 
-def arch_wanted(archs, target):
+def wanted_for(archs, target):
     if not archs:
         return True
     return any(fnmatch.fnmatchcase(target, pat) for pat in archs.split())
 
 
-def main():
-    args = sys.argv[1:]
-    srcpkgs, glibc_list, musl_list = args[:3]
-    release_lists = {}
-    for extra in args[3:]:
-        pkg, path = extra.split("=", 1)
-        with open(path) as fh:
-            release_lists[pkg] = {
-                line.strip() for line in fh if line.strip().endswith(".xbps")
-            }
-    published = {}
-    for arch, listfile in (("x86_64", glibc_list), ("x86_64-musl", musl_list)):
-        with open(listfile) as fh:
-            published[arch] = {
-                line.strip() for line in fh if line.strip().endswith(".xbps")
-            }
-    need = {"x86_64": [], "x86_64-musl": []}
+def load_pool(path):
+    with open(path) as fh:
+        return {ln.strip() for ln in fh if ln.strip().endswith(".xbps")}
+
+
+def collect_need(srcpkgs, arch, pool, release_lists):
+    """Templates in srcpkgs missing their main binpkg from pool."""
+    need = []
     for entry in sorted(os.listdir(srcpkgs)):
         tpldir = os.path.join(srcpkgs, entry)
         if not os.path.isdir(tpldir) or os.path.islink(tpldir):
@@ -95,24 +93,50 @@ def main():
         vals = parse_template(tpl)
         if not all(k in vals for k in ("pkgname", "version", "revision")):
             print(f"WARN: {entry}: cannot parse version, forcing build")
-            need["x86_64"].append(entry)
-            need["x86_64-musl"].append(entry)
+            need.append(entry)
             continue
-        is_musl_broken = musl_broken(tpl)
-        for arch in ("x86_64", "x86_64-musl"):
-            if arch == "x86_64-musl" and is_musl_broken:
-                continue
-            if not arch_wanted(vals.get("archs", ""), arch):
-                continue
-            want = (
-                f"{vals['pkgname']}-{vals['version']}_"
-                f"{vals['revision']}.{arch}.xbps"
-            )
-            pool = release_lists.get(entry, published[arch])
-            if want not in pool:
-                need[arch].append(entry)
-    for arch in ("x86_64", "x86_64-musl"):
-        print(f"{'glibc' if arch == 'x86_64' else 'musl'}:{' '.join(need[arch])}")
+        if arch == "x86_64-musl" and musl_broken(tpl):
+            continue
+        if not wanted_for(vals.get("archs", ""), arch):
+            continue
+        want = (
+            f"{vals['pkgname']}-{vals['version']}_"
+            f"{vals['revision']}.{arch}.xbps"
+        )
+        if want not in release_lists.get(entry, pool):
+            need.append(entry)
+    return need
+
+
+def main():
+    args = sys.argv[1:]
+    arch = "x86_64"
+    rest = []
+    for a in args:
+        if a.startswith("--arch="):
+            arch = a.split("=", 1)[1]
+        else:
+            rest.append(a)
+    positionals, extras = [], {}
+    for item in rest:
+        if "=" in item and os.path.isfile(item.split("=", 1)[1]):
+            pkg, path = item.split("=", 1)
+            extras[pkg] = path
+        else:
+            positionals.append(item)
+    release_lists = {pkg: load_pool(p) for pkg, p in extras.items()}
+    if len(positionals) == 2:
+        # single-arch: srcpkgs + one asset list
+        srcpkgs, listfile = positionals
+        need = collect_need(srcpkgs, arch, load_pool(listfile), release_lists)
+        print(f"pkgs:{' '.join(need)}")
+        return
+    srcpkgs, glibc_list, musl_list = positionals[:3]
+    published = {"x86_64": load_pool(glibc_list),
+                 "x86_64-musl": load_pool(musl_list)}
+    for target in ("x86_64", "x86_64-musl"):
+        need = collect_need(srcpkgs, target, published[target], release_lists)
+        print(f"{'glibc' if target == 'x86_64' else 'musl'}:{' '.join(need)}")
 
 
 if __name__ == "__main__":

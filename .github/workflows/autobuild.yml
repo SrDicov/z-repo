@@ -1,30 +1,39 @@
-name: Z Repo Autobuild
+name: Z Repo Autobuild (glibc)
 
 on:
   push:
     branches: [master, main]
-    paths-ignore:
-      # bot binpkgs deploys must not retrigger a full rebuild
-      - 'x86_64/**'
-      - 'x86_64-musl/**'
+    paths:
+      - '.github/**'
+      - 'keys/**'
+      - 'README.md'
+      - 'AGENTS.md'
   workflow_dispatch:
     inputs:
+      packages:
+        description: 'Build only these (comma/space separated, empty = auto-detect)'
+        required: false
+        default: ''
+      sync_only:
+        description: 'Skip build, only resign repodata and re-publish'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
       force:
-        description: 'Rebuild all packages even if binpkgs look current'
+        description: 'Rebuild all packages even if current'
         required: false
         default: 'false'
         type: choice
         options: ['false', 'true']
   schedule:
-    - cron: '0 * * * *'  # poll z-packages cada hora
+    - cron: '0 3 * * *' # daily: poll z-packages
   repository_dispatch:
     types: [z-packages-update]
 
 env:
-  # Packages shipped via GitHub releases (too big for git): the gate
-  # compares them against release assets (<pkg>-x86_64 tag) instead of
-  # the committed binpkgs.
-  RELEASE_PKGS: "librewolf"
+  ARCH: x86_64
+  REPO_TAG: stable
 
 concurrency:
   group: z-repo-autobuild
@@ -38,8 +47,7 @@ jobs:
     name: Detect outdated packages
     runs-on: ubuntu-latest
     outputs:
-      pkgs_glibc: ${{ steps.detect.outputs.pkgs_glibc }}
-      pkgs_musl: ${{ steps.detect.outputs.pkgs_musl }}
+      pkgs: ${{ steps.detect.outputs.pkgs }}
     steps:
       - name: Checkout workflow scripts
         uses: actions/checkout@v4
@@ -48,19 +56,15 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
 
-      - name: List published binpkgs (no download)
+      - name: List release assets (no download)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          gh api repos/${{ github.repository }}/contents/x86_64 --paginate \
-            --jq '.[].name' > glibc.txt
-          gh api repos/${{ github.repository }}/contents/x86_64-musl --paginate \
-            --jq '.[].name' > musl.txt
-          for p in $RELEASE_PKGS; do
-            gh release view "$p-x86_64" --json assets --jq '.assets[].name' \
-              > "release_$p.txt" || : > "release_$p.txt"
-          done
+          gh release view "$REPO_TAG" --json assets \
+            --jq '.assets[].name' > assets.txt 2>/dev/null \
+            || : > assets.txt
+          wc -l assets.txt
 
       - name: Clone z-packages (treeless)
         run: |
@@ -71,33 +75,30 @@ jobs:
         id: detect
         run: |
           set -e
-          args=""
-          for p in $RELEASE_PKGS; do args="$args $p=release_$p.txt"; done
-          # shellcheck disable=SC2086
           out=$(python3 .github/scripts/check_outdated.py \
-            z-packages/srcpkgs glibc.txt musl.txt $args)
+            z-packages/srcpkgs assets.txt --arch="$ARCH")
           echo "$out"
-          glibc=$(echo "$out" | sed -n 's/^glibc://p')
-          musl=$(echo "$out" | sed -n 's/^musl://p')
-          if [ "${{ inputs.force }}" = "true" ]; then
-            all=$(cd z-packages/srcpkgs && for d in */; do
+          auto=$(echo "$out" | sed -n 's/^pkgs://p')
+          if [ "${{ inputs.sync_only }}" = "true" ]; then
+            pkgs=""
+          elif [ -n "${{ inputs.packages }}" ]; then
+            pkgs=$(echo "${{ inputs.packages }}" | tr ',' ' ')
+          elif [ "${{ inputs.force }}" = "true" ]; then
+            pkgs=$(cd z-packages/srcpkgs && for d in */; do
               d=${d%/}; [ -L "$d" ] || printf '%s ' "$d"
             done)
-            glibc="$all"
-            musl="$all"
+          else
+            pkgs="$auto"
           fi
-          {
-            echo "pkgs_glibc=$glibc"
-            echo "pkgs_musl=$musl"
-          } >> "$GITHUB_OUTPUT"
-          if [ -z "$glibc$musl" ]; then
-            echo "All binpkgs current, builds will skip."
-          fi
-  build-glibc:
-    name: Build x86_64 (glibc)
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          [ -n "$pkgs" ] || echo "All binpkgs current, build will skip."
+
+  build:
+    name: Build and publish (glibc)
     needs: check
-    if: needs.check.outputs.pkgs_glibc != ''
+    if: needs.check.outputs.pkgs != '' || inputs.sync_only == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     container:
       image: ghcr.io/void-linux/void-glibc-full
       options: --privileged
@@ -107,363 +108,158 @@ jobs:
         ARCH: x86_64
         BOOTSTRAP: x86_64
     steps:
-      - name: Prepare container
-        run: |
-          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
-          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
-          xbps-install -Syu xbps 2>&1 | tail -n 5 || true
-          xbps-install -yu 2>&1 | tail -n 5 || true
-          xbps-install -y sudo bash curl git perl tar xz xbps-triggers 2>&1 | tail -n 10
-          useradd -G xbuilder -M builder 2>/dev/null || true
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          git config --global --add safe.directory '*'
-          git config --system --add safe.directory '*'
-
-      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
-        run: |
-          echo "Allowing unprivileged userns for xbps-uchroot..."
-          echo 0 | tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
-          sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
-          sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
-          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "apparmor file not present"
-          cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo "unprivileged_userns_clone not present"
-
       - name: Checkout z-repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Checkout z-packages (shallow treeless — 90% faster)
+      - name: Clone z-packages (treeless)
         run: |
           rm -rf z-packages
-          echo "Cloning z-packages shallow treeless..."
-          git clone --filter=tree:0 --depth 1 https://github.com/SrDicov/z-packages.git z-packages
-          echo "z-packages srcpkgs:"
-          ls z-packages/srcpkgs | head -n 20
+          git clone --filter=tree:0 --depth 1 \
+            https://github.com/SrDicov/z-packages.git z-packages
           echo "commit: $(git -C z-packages rev-parse --short HEAD)"
 
-      - name: Prepare z-packages masterdir
+      - name: Restore xbps caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            z-packages/hostdir/sources
+            z-packages/hostdir/ccache
+          key: glibc-xbps-v1
+          restore-keys: glibc-xbps-
+
+      - name: Prepare container (no full upgrade)
         run: |
-          chown -R builder:builder . z-packages
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
+          xbps-install -Syu xbps 2>&1 | tail -n 3 || true
+          xbps-install -y sudo bash curl git perl tar xz github-cli xbps-triggers 2>&1 | tail -n 3
+          useradd -G xbuilder -M builder 2>/dev/null || true
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory '*'
           git config --system --add safe.directory '*'
-          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64
-          if [ -d x86_64 ]; then
-            sudo -Eu builder bash -c 'cp -v x86_64/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || echo "no cache to sync"'
-            sudo -Eu builder bash -c 'cp -v x86_64/*-repodata* z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true'
-          fi
+
+      - name: Configure z-packages
+        run: |
+          chown -R builder:builder . z-packages
+          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64 \
+            z-packages/hostdir/sources z-packages/hostdir/ccache
           sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
           sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
-          # skip rebuild when the same version/revision is already in binpkgs
-          sudo -Eu builder bash -c 'cd z-packages && echo XBPS_PRESERVE_PKGS=yes >> etc/conf'
-          ls -la z-packages/hostdir/binpkgs/x86_64/ 2>&1 | head -n 20
-          ls -ld z-packages/hostdir 2>&1 | head -n 5
+          sudo -Eu builder bash -c 'cd z-packages && printf "%s\n" \
+            XBPS_PRESERVE_PKGS=yes XBPS_CCACHE=yes \
+            "XBPS_MAKEJOBS=$(nproc)" XBPS_ALLOW_RESTRICTED=yes >> etc/conf'
+
+      - name: Seed binpkgs from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd z-packages/hostdir/binpkgs/x86_64
+          if gh release view "$REPO_TAG" >/dev/null 2>&1; then
+            gh release download "$REPO_TAG" --pattern '*.xbps*' || true
+          elif [ -d "$GITHUB_WORKSPACE/x86_64" ]; then
+            # one-time migration: seed from git-committed binpkgs
+            cp -v "$GITHUB_WORKSPACE"/x86_64/*.xbps . 2>/dev/null || true
+          fi
+          ls *.xbps 2>/dev/null | wc -l
 
       - name: Bootstrap x86_64
         run: |
-          sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 50'
+          sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'
 
-      - name: Build packages (glibc)
+      - name: Build packages
+        if: inputs.sync_only != 'true'
         shell: bash
         run: |
           set -e
           set -o pipefail
-          PKGS="${{ needs.check.outputs.pkgs_glibc }}"
+          PKGS="${{ needs.check.outputs.pkgs }}"
           echo "Packages to build: $PKGS"
           failed=""
           for pkg in $PKGS; do
-            # symlinked subpackage dirs (e.g. font-inter-variable)
-            # are built via their parent template: skip them here
+            # symlinked subpackage dirs are built via their parent: skip
             if [ -L "z-packages/srcpkgs/$pkg" ]; then
               echo "=== Skipping $pkg (symlink, built with parent) ==="
               continue
             fi
+            if [ ! -d "z-packages/srcpkgs/$pkg" ]; then
+              echo "FAIL $pkg (no such template)"; failed="$failed $pkg"; continue
+            fi
             echo "=== Building $pkg (x86_64) ==="
-            # pipefail must live INSIDE bash -c: the | tail would otherwise
-            # mask xbps-src failures with tail's exit 0.
-            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || { echo "FAIL $pkg"; failed="$failed $pkg"; }
+            # pipefail inside bash -c: | tail must not mask xbps-src failures
+            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 60" \
+              || { echo "FAIL $pkg"; failed="$failed $pkg"; }
           done
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
-          # Native builds put packages in hostdir/binpkgs/ (top level), not x86_64/
-          # Move them to x86_64/ for consistency
+          # native builds land in hostdir/binpkgs/ top level: move to x86_64/
           if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
-            echo "Moving native build packages to x86_64/"
-            mkdir -p z-packages/hostdir/binpkgs/x86_64
             mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
             mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
           fi
-          ls -lh z-packages/hostdir/binpkgs/x86_64/ 2>&1 | head -n 30
 
-      - name: Sign packages & repodata (x86_64)
-        run: |
-          set -e
-          echo "$XBPS_PRIVATE_KEY" > /tmp/rsa.pem
-          chmod 600 /tmp/rsa.pem
-          if ls z-packages/hostdir/binpkgs/x86_64/*.xbps 1>/dev/null 2>&1; then
-            for f in z-packages/hostdir/binpkgs/x86_64/*.xbps; do
-              if [ ! -f "$f.sig2" ]; then
-                echo "Signing $f"
-                xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f" || echo "sign-pkg failed $f"
-              else
-                echo "Already signed $f"
-              fi
-            done
-            xbps-rindex -a z-packages/hostdir/binpkgs/x86_64/*.xbps
-            xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem z-packages/hostdir/binpkgs/x86_64
-            ls -lh z-packages/hostdir/binpkgs/x86_64/ | head -n 20
-            cat z-packages/hostdir/binpkgs/x86_64/*-repodata 2>&1 | head -n 5 || true
-          else
-            echo "No packages built for x86_64"
-          fi
+      - name: Prune old versions, sign and index
         env:
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
-
-      - name: Split oversized pkgs to release-backed repo
-        shell: bash
         run: |
           set -e
-          set -o pipefail
           echo "$XBPS_PRIVATE_KEY" > /tmp/rsa.pem
           chmod 600 /tmp/rsa.pem
-          BRLWDIR=z-packages/hostdir/binpkgs/librewolf
-          mkdir -p "$BRLWDIR"
-          # GitHub rejects files >100MB in git; librewolf exceeds it.
-          # Ship such pkgs via release assets as a second XBPS repo.
-          moved=0
-          for f in z-packages/hostdir/binpkgs/x86_64/librewolf-*.xbps; do
-            [ -e "$f" ] || continue
-            mv "$f" "$BRLWDIR/"
-            [ -e "$f.sig2" ] && mv "$f.sig2" "$BRLWDIR/" || true
-            moved=1
+          cd z-packages/hostdir/binpkgs/x86_64
+          # keep only the newest <pkg>-<ver>_<rev> per pkgname: no duplicates
+          python3 -c "
+          import os, re
+          from collections import defaultdict
+          pkgs = defaultdict(list)
+          for f in os.listdir('.'):
+              m = re.match(r'(.+)-([^-]+)_([^.]+)\.x86_64\.xbps$', f)
+              if m: pkgs[m.group(1)].append((m.group(2), m.group(3), f))
+          def vkey(v):
+              return tuple(int(p) if p.isdigit() else p for p in re.split(r'[.]', v))
+          for name, vers in pkgs.items():
+              vers.sort(key=lambda t: (vkey(t[0]), t[1]))
+              for _, _, f in vers[:-1]:
+                  for ext in ('', '.sig2', '.sig'):
+                      try: os.remove(f + ext)
+                      except FileNotFoundError: pass
+                  print('pruned', f)
+          "
+          for f in *.xbps; do
+            [ -f "$f.sig2" ] || xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f"
           done
-          if [ "$moved" = 1 ]; then
-            # rebuild main repodata without the moved pkgs
-            rm -f z-packages/hostdir/binpkgs/x86_64/*-repodata*
-            xbps-rindex -a z-packages/hostdir/binpkgs/x86_64/*.xbps
-            xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem z-packages/hostdir/binpkgs/x86_64
-            # librewolf-only repo
-            xbps-rindex -a "$BRLWDIR"/librewolf-*.xbps
-            xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem "$BRLWDIR"
-          else
-            echo "no oversized pkgs to split"
-          fi
-          ls -lh "$BRLWDIR" || true
-        env:
-          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
+          xbps-rindex -a *.xbps
+          xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem .
+          rm -f /tmp/rsa.pem
+          ls | wc -l
 
-      - name: Publish librewolf repo to GitHub release
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -e
           set -o pipefail
-          xbps-install -Sy github-cli 2>&1 | tail -n 2
-          BRLWDIR=z-packages/hostdir/binpkgs/librewolf
-          TAG=librewolf-x86_64
-          if ! ls "$BRLWDIR"/librewolf-*.xbps 1>/dev/null 2>&1; then
-            echo "no librewolf packages, skipping release publish"
-            exit 0
-          fi
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "LibreWolf x86_64 repo" \
-              --notes "Rolling XBPS repo for librewolf (too big for git)."
-          # drop stale versioned assets
-          for a in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
+          cd z-packages/hostdir/binpkgs/x86_64
+          gh release view "$REPO_TAG" >/dev/null 2>&1 || \
+            gh release create "$REPO_TAG" --title "Z Linux glibc repo" \
+              --notes "Rolling XBPS repo for x86_64 (glibc)."
+          # drop stale assets (old versions no longer published)
+          for a in $(gh release view "$REPO_TAG" --json assets --jq '.assets[].name'); do
             case "$a" in
               x86_64-repodata) ;;
-              librewolf-*) [ -e "$BRLWDIR/$a" ] || gh release delete-asset "$TAG" "$a" -y ;;
+              *.xbps*) [ -e "$a" ] || gh release delete-asset "$REPO_TAG" "$a" -y ;;
             esac
           done
           # upload new/changed assets only (same name+size = already there)
-          for f in "$BRLWDIR"/x86_64-repodata "$BRLWDIR"/librewolf-*.xbps*; do
+          for f in x86_64-repodata *.xbps*; do
             [ -e "$f" ] || continue
             n=$(basename "$f"); s=$(stat -c%s "$f")
-            rs=$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
+            rs=$(gh release view "$REPO_TAG" --json assets \
+              --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
             if [ "$rs" = "$s" ]; then
               echo "up to date: $n"
             else
-              gh release upload "$TAG" --clobber "$f"
+              gh release upload "$REPO_TAG" --clobber "$f"
             fi
           done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Deploy to z-repo (x86_64)
-        shell: bash
-        run: |
-          set -e
-          mkdir -p x86_64
-          if ls z-packages/hostdir/binpkgs/x86_64/* 1>/dev/null 2>&1; then
-            cp -v z-packages/hostdir/binpkgs/x86_64/* x86_64/ 2>&1 | tail -n 20
-            chown -R builder:builder x86_64
-          fi
-          if ls x86_64/*.xbps 1>/dev/null 2>&1; then rm -f x86_64/.gitkeep || true; fi
-          ls -lh x86_64/ | head -n 20 || true # sin || true: pipefail+head = SIGPIPE 141
-          sudo -Eu builder bash -c '
-            set -e
-            git config user.name "Z-Linux-Bot"
-            git config user.email "SrDicov@gmail.com"
-            git add x86_64 keys
-            git diff --cached --quiet && echo "No changes for x86_64" && exit 0
-            git commit -m "chore: update x86_64 binpkgs [glibc] $(date -u +%Y%m%d%H%M)"
-            pushed=""
-            for attempt in 1 2 3 4 5; do
-              if git pull --rebase && git push; then pushed=yes; break; fi
-              echo "push race (attempt $attempt), retrying..."
-            done
-            [ -n "$pushed" ] || { echo "PUSH FAILED"; exit 1; }
-          ' 2>&1 | tail -n 30
-
-  build-musl:
-    name: Build x86_64-musl
-    needs: check
-    if: needs.check.outputs.pkgs_musl != ''
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/void-linux/void-musl-full
-      options: --privileged
-      volumes:
-        - /dev:/dev
-      env:
-        ARCH: x86_64-musl
-        BOOTSTRAP: x86_64-musl
-    steps:
-      - name: Prepare container
-        run: |
-          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
-          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
-          xbps-install -Syu xbps 2>&1 | tail -n 5 || true
-          xbps-install -yu 2>&1 | tail -n 5 || true
-          xbps-install -y sudo bash curl git perl tar xz xbps-triggers 2>&1 | tail -n 10
-          useradd -G xbuilder -M builder 2>/dev/null || true
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          git config --global --add safe.directory '*'
-          git config --system --add safe.directory '*'
-
-      - name: Fix Node for musl (fake Alpine)
-        run: |
-          echo "Before:"; cat /etc/os-release | head -n 5
-          sed 's/^ID=.*/ID=alpine/' /etc/os-release > /tmp/os-release
-          cp /tmp/os-release /etc/os-release
-          echo "After:"; cat /etc/os-release | head -n 5
-
-      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
-        run: |
-          echo "Allowing unprivileged userns for xbps-uchroot..."
-          echo 0 | tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
-          sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
-          sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
-          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "apparmor file not present"
-          cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo "unprivileged_userns_clone not present"
-
-      - name: Checkout z-repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          ref: master
-
-      - name: Checkout z-packages (shallow treeless — 90% faster)
-        run: |
-          rm -rf z-packages
-          echo "Cloning z-packages shallow treeless..."
-          git clone --filter=tree:0 --depth 1 https://github.com/SrDicov/z-packages.git z-packages
-          echo "z-packages srcpkgs:"
-          ls z-packages/srcpkgs | head -n 20
-          echo "commit: $(git -C z-packages rev-parse --short HEAD)"
-
-      - name: Prepare z-packages masterdir (musl)
-        run: |
-          chown -R builder:builder . z-packages
-          git config --global --add safe.directory '*'
-          git config --system --add safe.directory '*'
-          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
-          if [ -d x86_64-musl ]; then
-            sudo -Eu builder bash -c 'cp -v x86_64-musl/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || echo "no musl cache"'
-            sudo -Eu builder bash -c 'cp -v x86_64-musl/*-repodata* z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true'
-          fi
-          sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
-          sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
-          # skip rebuild when the same version/revision is already in binpkgs
-          sudo -Eu builder bash -c 'cd z-packages && echo XBPS_PRESERVE_PKGS=yes >> etc/conf'
-          ls -la z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 20
-          ls -ld z-packages/hostdir 2>&1 | head -n 5
-
-      - name: Bootstrap x86_64-musl
-        run: |
-          sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 50'
-
-      - name: Build packages (musl)
-        shell: bash
-        run: |
-          set -e
-          set -o pipefail
-          PKGS="${{ needs.check.outputs.pkgs_musl }}"
-          echo "Packages to build (musl): $PKGS"
-          failed=""
-          for pkg in $PKGS; do
-            # symlinked subpackage dirs (e.g. font-inter-variable)
-            # are built via their parent template: skip them here
-            if [ -L "z-packages/srcpkgs/$pkg" ]; then
-              echo "=== Skipping $pkg (symlink, built with parent) ==="
-              continue
-            fi
-            echo "=== Building $pkg (x86_64-musl, native) ==="
-            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 100" || { echo "FAIL musl $pkg"; failed="$failed $pkg"; }
-          done
-          [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
-          # Native builds put packages in hostdir/binpkgs/ (top level), not x86_64-musl/
-          # Move them to x86_64-musl/ for consistency
-          if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
-            echo "Moving native build packages to x86_64-musl/"
-            mkdir -p z-packages/hostdir/binpkgs/x86_64-musl
-            mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
-            mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
-          fi
-          ls -lh z-packages/hostdir/binpkgs/x86_64-musl/ 2>&1 | head -n 30 || true
-          if ! ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
-            echo "ERROR: no musl packages built — failing instead of shipping stale/mislabeled binpkgs"
-            exit 1
-          fi
-
-      - name: Sign packages & repodata (musl)
-        run: |
-          set -e
-          echo "$XBPS_PRIVATE_KEY" > /tmp/rsa.pem
-          chmod 600 /tmp/rsa.pem
-          if ls z-packages/hostdir/binpkgs/x86_64-musl/*.xbps 1>/dev/null 2>&1; then
-            for f in z-packages/hostdir/binpkgs/x86_64-musl/*.xbps; do
-              [ -f "$f.sig2" ] || xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f" || echo "sign musl failed $f"
-            done
-            xbps-rindex -a z-packages/hostdir/binpkgs/x86_64-musl/*.xbps
-            xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem z-packages/hostdir/binpkgs/x86_64-musl
-            ls -lh z-packages/hostdir/binpkgs/x86_64-musl/ | head -n 20
-          else
-            echo "No musl packages built"
-          fi
-        env:
-          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
-
-      - name: Deploy to z-repo (musl)
-        shell: bash
-        run: |
-          set -e
-          mkdir -p x86_64-musl
-          if ls z-packages/hostdir/binpkgs/x86_64-musl/* 1>/dev/null 2>&1; then
-            cp -v z-packages/hostdir/binpkgs/x86_64-musl/* x86_64-musl/ 2>&1 | tail -n 20
-            chown -R builder:builder x86_64-musl
-          fi
-          if ls x86_64-musl/*.xbps 1>/dev/null 2>&1; then rm -f x86_64-musl/.gitkeep || true; fi
-          ls -lh x86_64-musl/ | head -n 20 || true # sin || true: pipefail+head = SIGPIPE 141
-          sudo -Eu builder bash -c '
-            set -e
-            git config user.name "Z-Linux-Bot"
-            git config user.email "SrDicov@gmail.com"
-            git add x86_64-musl keys
-            git diff --cached --quiet && echo "No changes for musl" && exit 0
-            git commit -m "chore: update x86_64-musl binpkgs $(date -u +%Y%m%d%H%M)"
-            pushed=""
-            for attempt in 1 2 3 4 5; do
-              if git pull --rebase && git push; then pushed=yes; break; fi
-              echo "push race (attempt $attempt), retrying..."
-            done
-            [ -n "$pushed" ] || { echo "PUSH FAILED"; exit 1; }
-          ' 2>&1 | tail -n 30
