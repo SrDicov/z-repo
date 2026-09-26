@@ -1,6 +1,6 @@
 # AGENTS.md
 
-glibc-only XBPS repo (`x86_64`). Binpkgs ship as `stable` release assets, never committed (see README migration note). musl twin: `z-repo-musl` (same layout, `--arch=x86_64-musl`, `void-musl-full`).
+glibc-only XBPS repo (`x86_64`). Binpkgs ship as `stable` release assets, never committed (gitignored; old `x86_64/` history predates 2026-09-26). musl twin (planned): `z-repo-musl`.
 
 - Templates live in `SrDicov/z-packages` (`srcpkgs/`). Never commit `.xbps`/`*-repodata` (gitignored).
 - `keys/zlinux-repo.pub` is the pubkey. Private key is `secrets.XBPS_PRIVATE_KEY` — never in git.

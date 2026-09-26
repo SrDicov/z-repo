@@ -2,7 +2,7 @@
 
 Repositorio binario XBPS para Z Linux (solo **glibc `x86_64`**), publicado
 como **assets del release `stable`** (modo repo-neko: nada en git).
-El gemelo musl vive en `z-repo-musl` (misma estructura, `x86_64-musl`).
+El gemelo musl previsto es `z-repo-musl` (misma estructura, `x86_64-musl`).
 
 - **Repo XBPS:** `https://github.com/SrDicov/z-repo/releases/download/stable`
 - **Source repo (plantillas):** `https://github.com/SrDicov/z-packages` (`srcpkgs/`)
@@ -26,8 +26,8 @@ sin descargar); `build` compila solo lo nuevo/desactualizado y publica.
 Sin duplicados: antes de firmar se conserva solo la versión más nueva de
 cada `pkgname` y se borran del release los assets viejos.
 
-Disparadores: diario (`0 3 * * *`), push a `.github/**`, `repository_dispatch`
-(`z-packages-update`) y manual con `packages=` (coma/espacio, vacío =
+Disparadores: diario (`0 3 * * *`), push a `.github/**`, `keys/` o docs,
+`repository_dispatch` (`z-packages-update`) y manual con `packages=` (coma/espacio, vacío =
 auto-detectar), `sync_only=true` (solo re-firmar `repodata` y republicar)
 o `force=true` (todo).
 
@@ -40,6 +40,7 @@ Treeless shallow clone, sin `xbps-install -yu` completo (mirror `repo-ci`),
 Paquetes e índices firmados con RSA (`xbps-rindex --sign`). La llave privada
 vive en `secrets.XBPS_PRIVATE_KEY` — nunca en git.
 
-## Migración desde git-commits
-Los `x86_64/*.xbps` viejos en git solo sirven como semilla de la primera
-publicación; tras ella: `git rm -r x86_64` (quedan `keys/` + docs).
+## Historial
+Los `.xbps` vivían commiteados en `x86_64/`; desde 2026-09-26 se publican
+como assets del release `stable` (ver releases). El historial git conserva
+los binarios viejos.
