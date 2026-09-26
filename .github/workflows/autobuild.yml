@@ -113,6 +113,17 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Prepare container (no full upgrade)
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
+          xbps-install -Syu xbps 2>&1 | tail -n 3 || true
+          xbps-install -y sudo bash curl git perl tar xz github-cli xbps-triggers 2>&1 | tail -n 3
+          useradd -G xbuilder -M builder 2>/dev/null || true
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          git config --global --add safe.directory '*'
+          git config --system --add safe.directory '*'
+
       - name: Clone z-packages (treeless)
         run: |
           rm -rf z-packages
@@ -128,17 +139,6 @@ jobs:
             z-packages/hostdir/ccache
           key: glibc-xbps-v1
           restore-keys: glibc-xbps-
-
-      - name: Prepare container (no full upgrade)
-        run: |
-          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
-          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
-          xbps-install -Syu xbps 2>&1 | tail -n 3 || true
-          xbps-install -y sudo bash curl git perl tar xz github-cli xbps-triggers 2>&1 | tail -n 3
-          useradd -G xbuilder -M builder 2>/dev/null || true
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          git config --global --add safe.directory '*'
-          git config --system --add safe.directory '*'
 
       - name: Configure z-packages
         run: |
