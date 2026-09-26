@@ -1,23 +1,12 @@
 # z-repo — Z Linux Binary Repository (glibc)
 
 Repositorio binario XBPS para Z Linux (solo **glibc `x86_64`**), publicado
-como **assets del release `stable`** (modo repo-neko: nada en git).
+como **assets del release `stable`**.
 El gemelo musl previsto es `z-repo-musl` (misma estructura, `x86_64-musl`).
 
 - **Repo XBPS:** `https://github.com/SrDicov/z-repo/releases/download/stable`
 - **Source repo (plantillas):** `https://github.com/SrDicov/z-packages` (`srcpkgs/`)
 - **Llave pública:** `keys/zlinux-repo.pub` (vía Pages)
-
-## Uso en mklive.sh
-```bash
-mkdir -p "$ROOTFS/var/db/xbps/keys"
-curl -sL https://srdicov.github.io/z-repo/keys/zlinux-repo.pub -o "$ROOTFS/var/db/xbps/keys/zlinux-repo.pub"
-
-sudo ./mklive.sh \
-  -r https://github.com/SrDicov/z-repo/releases/download/stable \
-  -r https://repo-default.voidlinux.org/current \
-  -t x86_64-YYYYMMDD-labwc
-```
 
 ## Workflow
 `autobuild.yml`: `check` (ligero, sin contenedor) compara cada template
@@ -39,8 +28,3 @@ Treeless shallow clone, sin `xbps-install -yu` completo (mirror `repo-ci`),
 ## Firma
 Paquetes e índices firmados con RSA (`xbps-rindex --sign`). La llave privada
 vive en `secrets.XBPS_PRIVATE_KEY` — nunca en git.
-
-## Historial
-Los `.xbps` vivían commiteados en `x86_64/`; desde 2026-09-26 se publican
-como assets del release `stable` (ver releases). El historial git conserva
-los binarios viejos.
