@@ -226,6 +226,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
+          RESIGN: ${{ inputs.resign }}
         shell: bash
         run: |
           bash .github/scripts/publish.sh z-packages/hostdir/binpkgs/x86_64
