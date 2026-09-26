@@ -34,6 +34,7 @@ on:
 env:
   ARCH: x86_64
   REPO_TAG: stable
+  GH_REPO: ${{ github.repository }} # gh inside z-packages/ clone must target this repo
 
 concurrency:
   group: z-repo-autobuild
