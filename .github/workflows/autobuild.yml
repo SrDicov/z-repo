@@ -177,6 +177,7 @@ jobs:
           sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'
 
       - name: Build packages
+        id: build
         if: inputs.sync_only != 'true'
         shell: bash
         run: |
@@ -199,74 +200,24 @@ jobs:
             sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 60" \
               || { echo "FAIL $pkg"; failed="$failed $pkg"; }
           done
-          [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
+          [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "FAILED packages:$failed (publishing partial results anyway)"
+          fi
+          # never exit 1 here: publish runs on always() and reports after
           # native builds land in hostdir/binpkgs/ top level: move to x86_64/
           if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
             mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
             mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
           fi
 
-      - name: Prune old versions, sign and index
-        env:
-          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
-        run: |
-          set -e
-          echo "$XBPS_PRIVATE_KEY" > /tmp/rsa.pem
-          chmod 600 /tmp/rsa.pem
-          cd z-packages/hostdir/binpkgs/x86_64
-          # keep only the newest <pkg>-<ver>_<rev> per pkgname: no duplicates
-          python3 -c "
-          import os, re
-          from collections import defaultdict
-          pkgs = defaultdict(list)
-          for f in os.listdir('.'):
-              m = re.match(r'(.+)-([^-]+)_([^.]+)\.x86_64\.xbps$', f)
-              if m: pkgs[m.group(1)].append((m.group(2), m.group(3), f))
-          def vkey(v):
-              return tuple(int(p) if p.isdigit() else p for p in re.split(r'[.]', v))
-          for name, vers in pkgs.items():
-              vers.sort(key=lambda t: (vkey(t[0]), t[1]))
-              for _, _, f in vers[:-1]:
-                  for ext in ('', '.sig2', '.sig'):
-                      try: os.remove(f + ext)
-                      except FileNotFoundError: pass
-                  print('pruned', f)
-          "
-          for f in *.xbps; do
-            [ -f "$f.sig2" ] || xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f"
-          done
-          xbps-rindex -a *.xbps
-          xbps-rindex --sign --signedby "Z Linux Core <SrDicov@gmail.com>" --privkey /tmp/rsa.pem .
-          rm -f /tmp/rsa.pem
-          ls | wc -l
-
-      - name: Publish to release
+      - name: Publish to release (always, even on build failure)
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
         shell: bash
         run: |
-          set -e
-          set -o pipefail
-          cd z-packages/hostdir/binpkgs/x86_64
-          gh release view "$REPO_TAG" >/dev/null 2>&1 || \
-            gh release create "$REPO_TAG" --title "Z Linux glibc repo" \
-              --notes "Rolling XBPS repo for x86_64 (glibc)."
-          # drop stale assets (old versions no longer published)
-          for a in $(gh release view "$REPO_TAG" --json assets --jq '.assets[].name'); do
-            case "$a" in
-              x86_64-repodata) ;;
-              *.xbps*) [ -e "$a" ] || gh release delete-asset "$REPO_TAG" "$a" -y ;;
-            esac
-          done
-          # upload new/changed assets only (same name+size = already there)
-          for f in x86_64-repodata *.xbps*; do
-            [ -e "$f" ] || continue
-            n=$(basename "$f"); s=$(stat -c%s "$f")
-            rs=$(gh release view "$REPO_TAG" --json assets \
-              --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
-            if [ "$rs" = "$s" ]; then
-              echo "up to date: $n"
-            else
-              gh release upload "$REPO_TAG" --clobber "$f"
-            fi
-          done
+          bash .github/scripts/publish.sh z-packages/hostdir/binpkgs/x86_64
+          failed="${{ steps.build.outputs.failed }}"
+          [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
