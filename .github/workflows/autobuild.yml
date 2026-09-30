@@ -86,6 +86,7 @@ jobs:
           # void-packages tree, which this job does not have, so a
           # missing index must not fail an otherwise-good build.
           set -e
+          git -C z-packages sparse-checkout init --cone 2>/dev/null || true
           git -C z-packages sparse-checkout set srcpkgs common 2>/dev/null || true
           python3 z-packages/common/scripts/lint-templates z-packages/srcpkgs \
             || echo "::warning::lint-templates findings above (advisory)"
