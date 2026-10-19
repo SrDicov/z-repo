@@ -232,11 +232,11 @@ jobs:
           # natively, the masterdir inside the chroot. Unpack into both.
           for f in "$seed"/*.xbps; do
             sudo bsdtar -xpf "$f" -C /
-            sudo bsdtar -xpf "$f" -C z-packages/masterdir-x86_64
+            # as builder: xbps-src writes into the masterdir as builder, and
+            # root-owned dirs there break the next unpack with EACCES
+            sudo -Eu builder bsdtar -xpf "$f" -C z-packages/masterdir-x86_64
           done
           sudo ldconfig
-          sudo -Eu builder bash -c \
-            'cd z-packages && ./xbps-src show-var XBPS_MASTERDIR XBPS_BUILDDIR XBPS_INSTALL_CMD 2>&1 | tail -5'
 
       - name: Build packages
         id: build
