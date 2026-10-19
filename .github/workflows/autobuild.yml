@@ -210,6 +210,18 @@ jobs:
           rm -f z-packages/masterdir-x86_64/.xbps_chroot_init
           test ! -e z-packages/masterdir-x86_64/.xbps_chroot_init
 
+      # The seeded library packages still have to be visible to pkg-config and
+      # the linker, which look at the build root, not at the masterdir. Install
+      # the source-built ones (-bin packages are applications, never build
+      # dependencies, and they are large) into the container root.
+      - name: Make seeded libraries visible to the build
+        run: |
+          set -e
+          cd z-packages/hostdir/binpkgs/x86_64
+          libs=$(ls *.xbps 2>/dev/null | grep -v -- '-bin-' | sed 's/\.xbps$//' || true)
+          [ -n "$libs" ] || exit 0
+          sudo xbps-install -y -c "$GITHUB_WORKSPACE/z-packages/hostdir/repocache-x86_64" $libs
+
       - name: Build packages
         id: build
         if: inputs.sync_only != 'true'
