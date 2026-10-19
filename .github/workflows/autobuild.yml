@@ -260,7 +260,7 @@ jobs:
             fi
             echo "=== Building $pkg (x86_64) ==="
             # pipefail inside bash -c: | tail must not mask xbps-src failures
-            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 60" \
+            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 500" \
               || { echo "FAIL $pkg"; failed="$failed $pkg"; }
           done
           [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
