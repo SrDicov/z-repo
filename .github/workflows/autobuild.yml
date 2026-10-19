@@ -201,17 +201,6 @@ jobs:
         run: |
           sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'
 
-      # binary-bootstrap leaves .xbps_chroot_init in the masterdir, which makes
-      # xbps-src believe it builds inside a chroot: target deps are installed
-      # into the masterdir but PKG_CONFIG_PATH and the -L for the masterdir libs
-      # are then skipped, so anything linking against a z-repo-only -devel
-      # package dies with "cannot find -l<lib>". Native-masterdir mode is what
-      # the rest of this job expects.
-      - name: Build in native masterdir mode
-        run: |
-          rm -f z-packages/masterdir-x86_64/.xbps_chroot_init
-          test ! -e z-packages/masterdir-x86_64/.xbps_chroot_init
-
       # The seeded library packages still have to be visible to pkg-config and
       # the linker, which look at the build root, not at the masterdir. Install
       # the source-built ones (-bin packages are applications, never build
