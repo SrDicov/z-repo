@@ -138,7 +138,7 @@ jobs:
           mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
           sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
           xbps-install -Syu xbps 2>&1 | tail -n 3 || true
-          xbps-install -y sudo bash curl git perl tar xz github-cli python3 ccache xbps-triggers 2>&1 | tail -n 3
+          xbps-install -y sudo bash curl git perl tar xz github-cli python3 ccache xbps-triggers libarchive-tools 2>&1 | tail -n 3
           useradd -G xbuilder -M builder 2>/dev/null || true
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory '*'
@@ -226,15 +226,16 @@ jobs:
           cp -f z-packages/hostdir/binpkgs/x86_64/*.xbps "$seed"/ 2>/dev/null || true
           rm -f "$seed"/*-bin-* "$seed"/*.sig2
           ( cd "$seed" && sudo xbps-rindex -a ./*.xbps )
-          sudo xbps-install -y -l "$seed" \
-            $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') 2>/dev/null ||
+          # xbps-src installs target deps into the masterdir, and CMake never
+          # passes LDFLAGS to the linker, so pkg-config "-lfoo" can only resolve
+          # if foo is in the real root. Unpack the seeded libs there.
           sudo xbps-install -y -O "$seed" \
-            $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') 2>/dev/null ||
-          echo "seed: xbps refused the local repo, unpacking the payload directly"
+            $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') ||
+          echo "seed: unpacking the payload into the root instead"
           for f in "$seed"/*.xbps; do
-            bsdtar -xpf "$f" -C / 2>/dev/null || true
+            sudo bsdtar -xpf "$f" -C /
           done
-          sudo ldconfig || true
+          sudo ldconfig
 
       - name: Build packages
         id: build
