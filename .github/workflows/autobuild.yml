@@ -219,12 +219,19 @@ jobs:
       - name: Make seeded libraries visible to the build
         continue-on-error: true
         run: |
+          set -u
+          seed=/var/cache/zrepo-seed
+          mkdir -p "$seed"
           cd z-packages/hostdir/binpkgs/x86_64
           for f in *.xbps; do
             case $f in *-bin-*) continue ;; esac
-            sudo xbps-install -y "$PWD/$f" ||
-              echo "seed: could not install $f, skipping"
+            cp -f "$f" "$seed/"
           done
+          sudo xbps-rindex -a "$seed" || true
+          sudo xbps-install -y -C /etc/xbps.d -c "$seed" \
+            $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') ||
+            echo "seed: some libraries could not be installed"
+          sudo ldconfig || true
 
       - name: Build packages
         id: build
