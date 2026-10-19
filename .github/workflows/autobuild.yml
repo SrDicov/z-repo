@@ -248,6 +248,10 @@ jobs:
           set -o pipefail
           PKGS="${{ needs.check.outputs.pkgs }}"
           echo "Packages to build: $PKGS"
+          ls -l /usr/lib/libhyprutils* 2>&1 || echo "PROBE: libhyprutils gone"
+          g++ -shared -o /dev/null -lhyprutils && echo "PROBE: plain link works" ||
+            echo "PROBE: plain link fails in the build environment"
+          /usr/bin/ld --verbose 2>/dev/null | grep -m1 SEARCH_DIR || true
           failed=""
           for pkg in $PKGS; do
             # symlinked subpackage dirs are built via their parent: skip
