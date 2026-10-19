@@ -226,18 +226,17 @@ jobs:
           cp -f z-packages/hostdir/binpkgs/x86_64/*.xbps "$seed"/ 2>/dev/null || true
           rm -f "$seed"/*-bin-* "$seed"/*.sig2
           ( cd "$seed" && sudo xbps-rindex -a ./*.xbps )
-          # xbps-src installs target deps into the masterdir, and CMake never
-          # passes LDFLAGS to the linker, so pkg-config "-lfoo" can only resolve
-          # if foo is in the real root. Unpack the seeded libs there.
-          sudo xbps-install -y -O "$seed" \
-            $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') ||
-          echo "seed: unpacking the payload into the root instead"
+          # xbps-src installs target deps into the masterdir, and CMake never passes
+          # LDFLAGS to the linker, so a pkg-config "-lfoo" can only resolve if the
+          # library sits in the root the build actually sees: the container root
+          # natively, the masterdir inside the chroot. Unpack into both.
           for f in "$seed"/*.xbps; do
             sudo bsdtar -xpf "$f" -C /
+            sudo bsdtar -xpf "$f" -C z-packages/masterdir-x86_64
           done
           sudo ldconfig
-          echo "seed: hyprutils in seed dir: $(ls "$seed" | grep -ci hyprutils || true)"
-          ls -l /usr/lib/libhyprutils* 2>&1 || echo "seed: NO libhyprutils in /usr/lib"
+          sudo -Eu builder bash -c \
+            'cd z-packages && ./xbps-src show-var XBPS_MASTERDIR XBPS_BUILDDIR XBPS_INSTALL_CMD 2>&1 | tail -5'
 
       - name: Build packages
         id: build
@@ -249,9 +248,6 @@ jobs:
           PKGS="${{ needs.check.outputs.pkgs }}"
           echo "Packages to build: $PKGS"
           ls -l /usr/lib/libhyprutils* 2>&1 || echo "PROBE: libhyprutils gone"
-          g++ -shared -o /dev/null -lhyprutils && echo "PROBE: plain link works" ||
-            echo "PROBE: plain link fails in the build environment"
-          /usr/bin/ld --verbose 2>/dev/null | grep -m1 SEARCH_DIR || true
           failed=""
           for pkg in $PKGS; do
             # symlinked subpackage dirs are built via their parent: skip
