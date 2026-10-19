@@ -222,10 +222,8 @@ jobs:
           cd z-packages/hostdir/binpkgs/x86_64
           for f in *.xbps; do
             case $f in *-bin-*) continue ;; esac
-            name=${f%.xbps}
-            sudo xbps-install -y -c \
-              "$GITHUB_WORKSPACE/z-packages/hostdir/repocache-x86_64" \
-              "$name" || echo "seed: could not install $name, skipping"
+            sudo xbps-install -y "$PWD/$f" ||
+              echo "seed: could not install $f, skipping"
           done
 
       - name: Build packages
