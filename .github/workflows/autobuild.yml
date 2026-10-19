@@ -232,7 +232,7 @@ jobs:
             $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') 2>/dev/null ||
           echo "seed: xbps refused the local repo, unpacking the payload directly"
           for f in "$seed"/*.xbps; do
-            bsdtar -xOf "$f" ./files 2>/dev/null | tar -xpf - -C / || true
+            bsdtar -xpf "$f" -C / 2>/dev/null || true
           done
           sudo ldconfig || true
 
