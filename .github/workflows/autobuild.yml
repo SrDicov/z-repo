@@ -227,8 +227,8 @@ jobs:
             case $f in *-bin-*) continue ;; esac
             cp -f "$f" "$seed/"
           done
-          sudo xbps-rindex -a "$seed" || true
-          sudo xbps-install -y -C /etc/xbps.d -c "$seed" \
+          sudo xbps-rindex -a ./*.xbps || true
+          sudo xbps-install -y -c "$seed" \
             $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') ||
             echo "seed: some libraries could not be installed"
           sudo ldconfig || true
