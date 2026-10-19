@@ -221,13 +221,11 @@ jobs:
         run: |
           set -u
           seed=/var/cache/zrepo-seed
+          rm -rf "$seed"
           mkdir -p "$seed"
-          cd z-packages/hostdir/binpkgs/x86_64
-          for f in *.xbps; do
-            case $f in *-bin-*) continue ;; esac
-            cp -f "$f" "$seed/"
-          done
-          sudo xbps-rindex -a ./*.xbps || true
+          cp -f z-packages/hostdir/binpkgs/x86_64/*.xbps "$seed"/ 2>/dev/null || true
+          rm -f "$seed"/*-bin-* "$seed"/*.sig2
+          ( cd "$seed" && sudo xbps-rindex -a ./*.xbps )
           sudo xbps-install -y -c "$seed" \
             $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') ||
             echo "seed: some libraries could not be installed"
