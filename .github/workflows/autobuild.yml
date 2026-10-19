@@ -213,14 +213,20 @@ jobs:
       # The seeded library packages still have to be visible to pkg-config and
       # the linker, which look at the build root, not at the masterdir. Install
       # the source-built ones (-bin packages are applications, never build
-      # dependencies, and they are large) into the container root.
+      # dependencies, and they are large) into the container root. Individual
+      # failures must not abort the job: one stale name is not worth losing
+      # every build.
       - name: Make seeded libraries visible to the build
+        continue-on-error: true
         run: |
-          set -e
           cd z-packages/hostdir/binpkgs/x86_64
-          libs=$(ls *.xbps 2>/dev/null | grep -v -- '-bin-' | sed 's/\.xbps$//' || true)
-          [ -n "$libs" ] || exit 0
-          sudo xbps-install -y -c "$GITHUB_WORKSPACE/z-packages/hostdir/repocache-x86_64" $libs
+          for f in *.xbps; do
+            case $f in *-bin-*) continue ;; esac
+            name=${f%.xbps}
+            sudo xbps-install -y -c \
+              "$GITHUB_WORKSPACE/z-packages/hostdir/repocache-x86_64" \
+              "$name" || echo "seed: could not install $name, skipping"
+          done
 
       - name: Build packages
         id: build
