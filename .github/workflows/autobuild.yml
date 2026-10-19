@@ -185,6 +185,8 @@ jobs:
           cd z-packages/hostdir/binpkgs/x86_64
           if gh release view "$REPO_TAG" >/dev/null 2>&1; then
             gh release download "$REPO_TAG" --pattern '*.xbps*' || true
+            # the index is what makes the seeded packages resolvable as a repo
+            gh release download "$REPO_TAG" --pattern '*-repodata*' || true
           elif [ -d "$GITHUB_WORKSPACE/x86_64" ]; then
             # one-time migration: seed from git-committed binpkgs
             cp -v "$GITHUB_WORKSPACE"/x86_64/*.xbps . 2>/dev/null || true
