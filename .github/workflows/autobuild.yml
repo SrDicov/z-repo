@@ -226,7 +226,7 @@ jobs:
           cp -f z-packages/hostdir/binpkgs/x86_64/*.xbps "$seed"/ 2>/dev/null || true
           rm -f "$seed"/*-bin-* "$seed"/*.sig2
           ( cd "$seed" && sudo xbps-rindex -a ./*.xbps )
-          sudo xbps-install -y -c "$seed" \
+          sudo xbps-install -y -c "$seed" -r "$seed" \
             $(cd "$seed" && ls *.xbps | sed 's/\.xbps$//') ||
             echo "seed: some libraries could not be installed"
           sudo ldconfig || true
