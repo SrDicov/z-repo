@@ -236,6 +236,8 @@ jobs:
             sudo bsdtar -xpf "$f" -C /
           done
           sudo ldconfig
+          echo "seed: hyprutils in seed dir: $(ls "$seed" | grep -ci hyprutils || true)"
+          ls -l /usr/lib/libhyprutils* 2>&1 || echo "seed: NO libhyprutils in /usr/lib"
 
       - name: Build packages
         id: build
