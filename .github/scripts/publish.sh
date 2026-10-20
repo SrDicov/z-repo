@@ -46,7 +46,31 @@ rm -f ./*.sig2
 xbps-rindex --sign-pkg --privkey /tmp/rsa.pem ./*.xbps
 xbps-rindex -a *.xbps
 xbps-rindex --sign --signedby "$SIGNED_BY" --privkey /tmp/rsa.pem .
-rm -f /tmp/rsa.pem
+
+# publish the public key both raw (PEM) and in the exact plist format
+# xbps externalizes to /var/db/xbps/keys/<fingerprint>.plist (format
+# reproduced byte-for-byte from an xbps import in a Void container), so
+# users can pre-import without an interactive prompt:
+# curl -O <release URL>/$fp.plist
+# cp $fp.plist /var/db/xbps/keys/
+openssl pkey -in /tmp/rsa.pem -pubout -out /tmp/pub.pem
+kh=$(ssh-keygen -i -m PKCS8 -f /tmp/pub.pem | ssh-keygen -lf - -E md5)
+bits=${kh%% *}; fp=$(printf '%s\n' "$kh" | awk '{print $3}')
+[ -n "$bits" ] && [ -n "$fp" ] || { echo "failed to derive pubkey fingerprint" >&2; exit 1; }
+esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+{
+  printf '%s\n' \
+    '<?xml version="1.0" encoding="UTF-8"?>' \
+    '<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+    '<plist version="1.0">' \
+    '<dict>'
+  printf '\t<key>public-key</key>\n\t<data>%s</data>\n' "$(base64 -w0 /tmp/pub.pem)"
+  printf '\t<key>public-key-size</key>\n\t<integer>%s</integer>\n' "$bits"
+  printf '\t<key>signature-by</key>\n\t<string>%s</string>\n' "$(esc "$SIGNED_BY")"
+  printf '%s\n' '</dict>' '</plist>'
+} > "$fp.plist"
+cp /tmp/pub.pem zlinux-repo.pub
+rm -f /tmp/rsa.pem /tmp/pub.pem
 
 repodata="$ARCH-repodata"
 gh release view "$REPO_TAG" >/dev/null 2>&1 || \
@@ -84,7 +108,7 @@ rm -f "$expected"
 # upload new/changed assets (same name+size = already there).
 # RSA sigs are fixed-size and a fresh one is generated every run, so
 # .sig2 files always upload; .xbps and the repodata keep the size hedge.
-for f in "$repodata" *.xbps*; do
+for f in "$fp.plist" zlinux-repo.pub "$repodata" *.xbps*; do
   [ -e "$f" ] || continue
   n=$(basename "$f"); s=$(stat -c%s "$f")
   rs=$(gh release view "$REPO_TAG" --json assets \
