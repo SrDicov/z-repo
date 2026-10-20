@@ -49,13 +49,19 @@ xbps-rindex --sign --signedby "$SIGNED_BY" --privkey /tmp/rsa.pem .
 
 # publish the public key both raw (PEM) and in the exact plist format
 # xbps externalizes to /var/db/xbps/keys/<fingerprint>.plist (format
-# reproduced byte-for-byte from an xbps import in a Void container), so
-# users can pre-import without an interactive prompt:
+# byte-identical to an xbps import in a Void container), so users can
+# pre-import without an interactive prompt: xbps names that file after
+# the MD5 SSH fingerprint with colons but WITHOUT the "MD5:" prefix.
 # curl -O <release URL>/$fp.plist
 # cp $fp.plist /var/db/xbps/keys/
 openssl pkey -in /tmp/rsa.pem -pubout -out /tmp/pub.pem
 kh=$(ssh-keygen -i -m PKCS8 -f /tmp/pub.pem | ssh-keygen -lf - -E md5)
-bits=${kh%% *}; fp=$(printf '%s\n' "$kh" | awk '{print $3}')
+bits=${kh%% *}
+# ssh-keygen prints "bits fp comment": the fingerprint is field 2,
+# "MD5:xx:...".  Field 3 is the comment ("no" here), not the fingerprint.
+fp=${kh#* };
+fp=${fp%% *}
+fp=${fp#MD5:}
 [ -n "$bits" ] && [ -n "$fp" ] || { echo "failed to derive pubkey fingerprint" >&2; exit 1; }
 esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 {
@@ -76,18 +82,21 @@ repodata="$ARCH-repodata"
 gh release view "$REPO_TAG" >/dev/null 2>&1 || \
   gh release create "$REPO_TAG" --title "Z Linux $ARCH repo" \
     --notes "Rolling XBPS repo for $ARCH."
-# drop stale assets. An .xbps and its .sig2 are one logical asset:
-# build the expected set from the local files and delete every remote
-# .xbps/.sig2 asset absent from it, so a signature can never outlive
-# its package (or vice versa).
+# drop stale assets. Everything this script owns is a set: packages and
+# their .sig2 are one logical asset, and the key(s)/repodata the repo
+# exists for. Build the expected set from the local files (the plist
+# name is the current key fingerprint) and delete every remote asset
+# absent from it, so a signature can never outlive its package and a
+# renamed key asset cannot linger.
 expected=$(mktemp)
 {
   printf '%s\n' *.xbps
   printf '%s\n' *.xbps.sig2
+  printf '%s\n' "$fp.plist" zlinux-repo.pub "$repodata"
 } | sort -u > "$expected"
 stale=0
 while IFS= read -r a; do
-  case "$a" in *.xbps*) ;; *) continue ;; esac
+  case "$a" in "") continue ;; esac
   grep -Fxq -- "$a" "$expected" && continue
   for try in 1 2 3; do
     if gh release delete-asset "$REPO_TAG" "$a" -y; then
