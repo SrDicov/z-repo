@@ -40,9 +40,10 @@ for name, vers in pkgs.items():
                 pass
         print("pruned", f)
 EOF
-for f in *.xbps; do
-  [ -f "$f.sig2" ] || xbps-rindex --sign-pkg --privkey /tmp/rsa.pem "$f"
-done
+# every publication re-signs with the current key: a .sig2 left over
+# from a rotated key would keep packages signed by the retired key
+rm -f ./*.sig2
+xbps-rindex --sign-pkg --privkey /tmp/rsa.pem ./*.xbps
 xbps-rindex -a *.xbps
 xbps-rindex --sign --signedby "$SIGNED_BY" --privkey /tmp/rsa.pem .
 rm -f /tmp/rsa.pem
