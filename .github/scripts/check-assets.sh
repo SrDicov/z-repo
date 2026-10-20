@@ -1,6 +1,7 @@
 #!/bin/bash
 # Release integrity check: every .xbps asset needs its .sig2 and every
-# .sig2 its .xbps, and every package the repodata indexes needs both.
+# .sig2 its .xbps, every signature verifies against the published key,
+# and every package the repodata indexes needs both.
 # Prints one line per discrepancy; exit 0 when clean, 1 when not.
 # Usage: bash .github/scripts/check-assets.sh [REPO] [TAG]
 set -e
@@ -20,6 +21,17 @@ if [ -z "$repodata" ]; then
 fi
 gh release download "$TAG" --repo "$REPO" -p "$repodata" --clobber \
   -O "$tmp/$repodata"
+
+pub="$tmp/zlinux-repo.pub"
+# current key: the release asset, falling back to the committed one
+if ! gh release download "$TAG" --repo "$REPO" -p zlinux-repo.pub \
+    --clobber -O "$pub" 2>/dev/null; then
+  if [ ! -f keys/zlinux-repo.pub ]; then
+    echo "no zlinux-repo.pub: release asset or committed key required"
+    exit 1
+  fi
+  cp keys/zlinux-repo.pub "$pub"
+fi
 
 # pkgver + architecture of everything the published index advertises
 bsdtar -xOf "$tmp/$repodata" index.plist | awk -v FS='[<>]' '
@@ -49,4 +61,17 @@ while read -r pkgver arch; do
     grep -Fxq -- "$f" "$tmp/assets" || { echo "indexed, no asset: $f"; bad=1; }
   done
 done < "$tmp/index"
+
+# cryptographic check: .sig2 is RSA-SHA256 over the .xbps digest
+mkdir -p "$tmp/dl"
+gh release download "$TAG" --repo "$REPO" -p '*.xbps' -p '*.xbps.sig2' \
+  --clobber -D "$tmp/dl"
+for x in "$tmp"/dl/*.xbps; do
+  [ -f "$x" ] || continue
+  if ! openssl dgst -sha256 -verify "$pub" -signature "$x.sig2" "$x" \
+      >/dev/null 2>&1; then
+    echo "invalid signature: ${x##*/}"
+    bad=1
+  fi
+done
 exit $bad
