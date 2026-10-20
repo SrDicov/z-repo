@@ -51,13 +51,35 @@ repodata="$ARCH-repodata"
 gh release view "$REPO_TAG" >/dev/null 2>&1 || \
   gh release create "$REPO_TAG" --title "Z Linux $ARCH repo" \
     --notes "Rolling XBPS repo for $ARCH."
-# drop stale assets (old versions no longer published)
-for a in $(gh release view "$REPO_TAG" --json assets --jq '.assets[].name'); do
-  case "$a" in
-    "$repodata") ;;
-    *.xbps*) [ -e "$a" ] || gh release delete-asset "$REPO_TAG" "$a" -y ;;
-  esac
-done
+# drop stale assets. An .xbps and its .sig2 are one logical asset:
+# build the expected set from the local files and delete every remote
+# .xbps/.sig2 asset absent from it, so a signature can never outlive
+# its package (or vice versa).
+expected=$(mktemp)
+{
+  printf '%s\n' *.xbps
+  printf '%s\n' *.xbps.sig2
+} | sort -u > "$expected"
+stale=0
+while IFS= read -r a; do
+  case "$a" in *.xbps*) ;; *) continue ;; esac
+  grep -Fxq -- "$a" "$expected" && continue
+  for try in 1 2 3; do
+    if gh release delete-asset "$REPO_TAG" "$a" -y; then
+      echo "deleted stale asset $a"
+      break
+    elif [ "$try" -lt 3 ]; then
+      echo "delete $a failed (try $try), retrying" >&2
+      sleep 3
+    else
+      echo "FAILED to delete stale asset $a" >&2
+      stale=1
+    fi
+  done
+done < <(gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" \
+  --paginate --jq '.assets[].name' | sort -u)
+rm -f "$expected"
+[ "$stale" -eq 0 ] || exit 1
 # upload new/changed assets (same name+size = already there).
 # NOTE: RSA sigs are fixed-size, so after a key rotation same-size sigs
 # would look current: RESIGN=true forces upload of everything.
