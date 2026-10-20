@@ -82,14 +82,14 @@ done < <(gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" \
 rm -f "$expected"
 [ "$stale" -eq 0 ] || exit 1
 # upload new/changed assets (same name+size = already there).
-# NOTE: RSA sigs are fixed-size, so after a key rotation same-size sigs
-# would look current: RESIGN=true forces upload of everything.
+# RSA sigs are fixed-size and a fresh one is generated every run, so
+# .sig2 files always upload; .xbps and the repodata keep the size hedge.
 for f in "$repodata" *.xbps*; do
   [ -e "$f" ] || continue
   n=$(basename "$f"); s=$(stat -c%s "$f")
   rs=$(gh release view "$REPO_TAG" --json assets \
     --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
-  if [ "${RESIGN:-false}" != "true" ] && [ "$rs" = "$s" ]; then
+  if [ "${RESIGN:-false}" != "true" ] && [ "${n##*.}" != "sig2" ] && [ "$rs" = "$s" ]; then
     echo "up to date: $n"
   else
     gh release upload "$REPO_TAG" --clobber "$f"
