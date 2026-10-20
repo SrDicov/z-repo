@@ -105,17 +105,24 @@ done < <(gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" \
   --paginate --jq '.assets[].name' | sort -u)
 rm -f "$expected"
 [ "$stale" -eq 0 ] || exit 1
-# upload new/changed assets (same name+size = already there).
-# RSA sigs are fixed-size and a fresh one is generated every run, so
-# .sig2 files always upload; .xbps and the repodata keep the size hedge.
+# upload new/changed assets. Size is not identity: a rebuilt package
+# can keep the exact byte count while its content changed, and pairing
+# the old .xbps with the fresh .sig2 leaves an invalid signature.
+# Compare the sha256 digest the GitHub assets API exposes for every
+# asset ("sha256:<hash>", via the REST API; gh release view does not)
+# against the local file: one criterion for .xbps, .sig2 and the rest.
+assets=$(mktemp)
+gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" --paginate \
+  --jq '.assets[] | .digest + " " + .name' > "$assets"
 for f in "$fp.plist" zlinux-repo.pub "$repodata" *.xbps*; do
   [ -e "$f" ] || continue
-  n=$(basename "$f"); s=$(stat -c%s "$f")
-  rs=$(gh release view "$REPO_TAG" --json assets \
-    --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
-  if [ "${RESIGN:-false}" != "true" ] && [ "${n##*.}" != "sig2" ] && [ "$rs" = "$s" ]; then
+  n=$(basename "$f")
+  ld="sha256:$(sha256sum "$f" | awk '{print $1}')"
+  rd=$(awk -v n="$n" '$2 == n { print $1 }' "$assets")
+  if [ "$ld" = "$rd" ]; then
     echo "up to date: $n"
   else
     gh release upload "$REPO_TAG" --clobber "$f"
   fi
 done
+rm -f "$assets"
