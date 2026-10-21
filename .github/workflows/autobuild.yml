@@ -184,9 +184,13 @@ jobs:
           set -e
           cd z-packages/hostdir/binpkgs/x86_64
           if gh release view "$REPO_TAG" >/dev/null 2>&1; then
-            gh release download "$REPO_TAG" --pattern '*.xbps*' || true
+            # no `|| true`: a partial seed once starved the publish step
+            # and it pruned packages it had never seen. If this download
+            # fails, the run fails (publish still reports on always(),
+            # and publish.sh no longer deletes unproven assets).
+            gh release download "$REPO_TAG" --pattern '*.xbps*'
             # the index is what makes the seeded packages resolvable as a repo
-            gh release download "$REPO_TAG" --pattern '*-repodata*' || true
+            gh release download "$REPO_TAG" --pattern '*-repodata*'
           elif [ -d "$GITHUB_WORKSPACE/x86_64" ]; then
             # one-time migration: seed from git-committed binpkgs
             cp -v "$GITHUB_WORKSPACE"/x86_64/*.xbps . 2>/dev/null || true

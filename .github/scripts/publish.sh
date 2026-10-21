@@ -82,22 +82,55 @@ repodata="$ARCH-repodata"
 gh release view "$REPO_TAG" >/dev/null 2>&1 || \
   gh release create "$REPO_TAG" --title "Z Linux $ARCH repo" \
     --notes "Rolling XBPS repo for $ARCH."
-# drop stale assets. Everything this script owns is a set: packages and
-# their .sig2 are one logical asset, and the key(s)/repodata the repo
-# exists for. Build the expected set from the local files (the plist
-# name is the current key fingerprint) and delete every remote asset
-# absent from it, so a signature can never outlive its package and a
-# renamed key asset cannot linger.
+# drop stale assets, but only what can be proven superseded. The
+# expected set reflects the seed, and a partial seed is exactly how the
+# release lost hyprsunset and hyprland-preview-share-picker once. So:
+# - a package not built this run keeps ALL its remote assets;
+# - a locally present package's own old assets are superseded;
+# - the key plist (any fingerprint), the pub and the repodata are
+#   regenerated below, so their old names can always go;
+# - everything else is kept, loudly, not deleted blind.
 expected=$(mktemp)
 {
   printf '%s\n' *.xbps
   printf '%s\n' *.xbps.sig2
   printf '%s\n' "$fp.plist" zlinux-repo.pub "$repodata"
 } | sort -u > "$expected"
+# pkgver without arch and revision -> pkgname, same last-dash split the
+# prune step above uses
+pkgname() {
+  case "$1" in
+    *.xbps.sig2) b=${1%.xbps.sig2} ;;
+    *.xbps.sig)  b=${1%.xbps.sig} ;;
+    *.xbps)      b=${1%.xbps} ;;
+    *) return 1 ;;
+  esac
+  b=${b%.*}
+  b=${b%_*}
+  printf '%s\n' "${b%-*}"
+}
+localpkgs=$(mktemp)
+for f in *.xbps; do pkgname "$f"; done | sort -u > "$localpkgs"
 stale=0
+kept=0
 while IFS= read -r a; do
   case "$a" in "") continue ;; esac
   grep -Fxq -- "$a" "$expected" && continue
+  del=no
+  case "$a" in
+    *.plist | zlinux-repo.pub | *-repodata) del=yes ;;
+    *.xbps.sig2 | *.xbps.sig)
+      if grep -Fxq -- "$(pkgname "$a")" "$localpkgs"; then del=yes; fi
+      ;;
+    *.xbps)
+      if grep -Fxq -- "$(pkgname "$a")" "$localpkgs"; then del=yes; fi
+      ;;
+  esac
+  if [ "$del" = no ]; then
+    echo "keeping asset not proven stale (package not built this run): $a"
+    kept=$((kept + 1))
+    continue
+  fi
   for try in 1 2 3; do
     if gh release delete-asset "$REPO_TAG" "$a" -y; then
       echo "deleted stale asset $a"
@@ -112,7 +145,10 @@ while IFS= read -r a; do
   done
 done < <(gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" \
   --paginate --jq '.assets[].name' | sort -u)
-rm -f "$expected"
+rm -f "$expected" "$localpkgs"
+if [ "$kept" -gt 0 ]; then
+  echo "::warning::$kept release asset(s) kept unverified; their package was not in this run's set (seed incomplete?)"
+fi
 [ "$stale" -eq 0 ] || exit 1
 # upload new/changed assets. Size is not identity: a rebuilt package
 # can keep the exact byte count while its content changed, and pairing
