@@ -44,7 +44,16 @@ EOF
 # from a rotated key would keep packages signed by the retired key
 rm -f ./*.sig2
 xbps-rindex --sign-pkg --privkey /tmp/rsa.pem ./*.xbps
-xbps-rindex -a *.xbps
+# -af, never plain -a: without -f xbps-rindex skips already registered
+# entries ("index: skipping `pkg' (x86_64), already registered"), so a
+# package rebuilt with the same version+revision kept the OLD
+# filename-sha256 in the seeded repodata while the NEW asset got
+# uploaded: the index stopped describing the published asset.
+xbps-rindex -af ./*.xbps
+# the seeded repodata still holds entries for versions pruned above
+# (asset deleted); drop entries whose local file is missing or
+# hash-mismatched so the index describes exactly the .xbps on disk
+xbps-rindex -cC .
 xbps-rindex --sign --signedby "$SIGNED_BY" --privkey /tmp/rsa.pem .
 
 # publish the public key both raw (PEM) and in the exact plist format
@@ -159,15 +168,64 @@ fi
 assets=$(mktemp)
 gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" --paginate \
   --jq '.assets[] | .digest + " " + .name' > "$assets"
-for f in "$fp.plist" zlinux-repo.pub "$repodata" *.xbps*; do
-  [ -e "$f" ] || continue
-  n=$(basename "$f")
-  ld="sha256:$(sha256sum "$f" | awk '{print $1}')"
+# upload in order: key, packages and signatures first, repodata LAST,
+# so a client never reads an index that describes assets not yet in
+# place (the index advertises, the packages exist)
+upload_one() {
+  [ -e "$1" ] || return 0
+  n=$(basename "$1")
+  ld="sha256:$(sha256sum "$1" | awk '{print $1}')"
   rd=$(awk -v n="$n" '$2 == n { print $1 }' "$assets")
   if [ "$ld" = "$rd" ]; then
     echo "up to date: $n"
   else
-    gh release upload "$REPO_TAG" --clobber "$f"
+    gh release upload "$REPO_TAG" --clobber "$1"
   fi
+}
+for f in "$fp.plist" zlinux-repo.pub ./*.xbps ./*.xbps.sig2; do
+  upload_one "$f"
 done
+upload_one "$repodata"
 rm -f "$assets"
+
+# final gate: what the index advertises must be what the release
+# serves. check-assets verifies asset pairs and signatures, but nothing
+# compared the index entry filename-sha256 against the asset content,
+# which is how the stale hyprland 0.56.2_2 entry shipped. Re-read the
+# digests AFTER the uploads and fail loudly on any mismatch.
+bad=0
+indexed=$(mktemp)
+bsdtar -xOf "$repodata" index.plist | awk -v FS='[<>]' '
+  /^\t<dict>$/ { intopkg = 1; next }
+  intopkg && /^\t<\/dict>$/ {
+    if (pkgver != "" && arch != "" && sha != "")
+      print pkgver, arch, sha
+    intopkg = 0; pkgver = ""; arch = ""; sha = ""; next
+  }
+  intopkg && $2 == "key" { field = $3; next }
+  intopkg && $2 == "string" && field == "architecture" { arch = $3; field = "" }
+  intopkg && $2 == "string" && field == "filename-sha256" { sha = $3; field = "" }
+  intopkg && $2 == "string" && field == "pkgver" { pkgver = $3; field = "" }
+' > "$indexed"
+[ -s "$indexed" ] || { echo "verification failed: empty index in $repodata" >&2; exit 1; }
+assets=$(mktemp)
+gh api "repos/$GH_REPO/releases/tags/$REPO_TAG" --paginate \
+  --jq '.assets[] | .digest + " " + .name' > "$assets"
+while read -r pkgver arch isha; do
+  f="$pkgver.$arch.xbps"
+  rd=$(awk -v n="$f" '$2 == n { print $1 }' "$assets")
+  if [ -z "$rd" ]; then
+    echo "indexed, no asset: $f" >&2
+    bad=1
+  elif [ "$rd" != "sha256:$isha" ]; then
+    echo "index sha mismatch: $f (index $isha, released ${rd#sha256:})" >&2
+    bad=1
+  fi
+  grep -Fxq -- "$f.sig2" <(awk '{print $2}' "$assets") || {
+    echo "indexed, no signature: $f.sig2" >&2
+    bad=1
+  }
+done < "$indexed"
+rm -f "$indexed" "$assets"
+[ "$bad" -eq 0 ] || exit 1
+echo "verified: index matches every published asset"
