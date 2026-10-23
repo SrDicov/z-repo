@@ -28,3 +28,19 @@ Treeless shallow clone, sin `xbps-install -yu` completo (mirror `repo-ci`),
 ## Firma
 Paquetes e índices firmados con RSA (`xbps-rindex --sign`). La llave privada
 vive en `secrets.XBPS_PRIVATE_KEY` — nunca en git.
+
+## Instalación
+
+El asset con la clave lleva el fingerprint con **puntos** (GitHub no admite
+`:` en nombres de asset), pero xbps indexa las claves por el **nombre del
+fichero** y espera dos puntos. Hay que renombrarla al copiarla:
+
+```sh
+fp=02:16:21:e8:80:43:b6:16:d4:63:13:e5:5d:e1:32:b7
+mkdir -p /var/db/xbps/keys /etc/xbps.d
+curl -fsSL -o "/var/db/xbps/keys/$fp.plist" \
+  "https://github.com/SrDicov/z-repo/releases/download/stable/${fp//:/.}.plist"
+echo "repository=https://github.com/SrDicov/z-repo/releases/download/stable" \
+  > /etc/xbps.d/10-zrepo.conf
+xbps-install -S
+```
