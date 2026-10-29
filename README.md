@@ -20,6 +20,21 @@ Disparadores: diario (`0 3 * * *`), push a `.github/**`, `keys/` o docs,
 auto-detectar), `sync_only=true` (solo re-firmar `repodata` y republicar)
 o `force=true` (todo).
 
+### Concurrencia
+
+`autobuild.yml` lleva `concurrency.cancel-in-progress: false`, pero GitHub
+solo mantiene **un run pendiente** por grupo. Para no matar un build de ~40
+min, `z-packages/.github/workflows/trigger-repos.yml` **no dispara** si ya hay
+un run de `autobuild.yml` que no esté `completed`; los pushes rápidos se
+coalescen (`cancel-in-progress: true` en el trigger).
+
+Para forzar un rebuild aunque haya otro run en curso:
+
+```sh
+gh workflow run autobuild.yml -R SrDicov/z-repo \
+  -f packages="singularity-desktop,labwc-singularity" -f force=true
+```
+
 ## Caché / velocidad
 Treeless shallow clone, sin `xbps-install -yu` completo (mirror `repo-ci`),
 `XBPS_PRESERVE_PKGS + CCACHE + MAKEJOBS=$(nproc)` y caché de
