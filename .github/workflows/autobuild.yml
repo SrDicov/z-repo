@@ -135,6 +135,8 @@ jobs:
 
       - name: Prepare container (no full upgrade)
         run: |
+          set -e
+          set -o pipefail
           mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
           sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
           xbps-install -Syu xbps 2>&1 | tail -n 3 || true
@@ -203,7 +205,14 @@ jobs:
 
       - name: Bootstrap x86_64
         run: |
-          sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'
+          for attempt in 1 2 3; do
+            if sudo -Eu builder bash -c 'set -o pipefail; cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'; then
+              exit 0
+            fi
+            echo "bootstrap attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
+          exit 1
 
       # The seeded library packages still have to be visible to pkg-config and
       # the linker, which look at the build root, not at the masterdir. Install
