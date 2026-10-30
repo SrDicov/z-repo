@@ -263,9 +263,19 @@ jobs:
               echo "FAIL $pkg (no such template)"; failed="$failed $pkg"; continue
             fi
             echo "=== Building $pkg (x86_64) ==="
-            # pipefail inside bash -c: | tail must not mask xbps-src failures
-            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 500" \
-              || { echo "FAIL $pkg"; failed="$failed $pkg"; }
+            # Full log per package (uploaded as an artifact). On failure print
+            # the first real ERROR lines: xbps-src's cleanup floods the tail
+            # with [DEBUG] remove lines and hides the cause.
+            mkdir -p z-packages/logs
+            if ! sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg" \
+                 > "z-packages/logs/$pkg.log" 2>&1; then
+              echo "FAIL $pkg"
+              grep -nE "ERROR|error:|FAIL|not found|No such file|undefined reference|cannot" \
+                "z-packages/logs/$pkg.log" | head -40 || true
+              echo "--- last 40 lines ---"
+              tail -n 40 "z-packages/logs/$pkg.log" || true
+              failed="$failed $pkg"
+            fi
           done
           [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
           if [ -n "$failed" ]; then
