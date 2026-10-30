@@ -136,7 +136,8 @@ jobs:
       - name: Prepare container (no full upgrade)
         run: |
           set -e
-          set -o pipefail
+          # /bin/sh is dash in the Void image and it has no bash yet, so no
+          # `set -o pipefail` here (it aborts the step under dash).
           mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
           sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
           xbps-install -Syu xbps 2>&1 | tail -n 3 || true
