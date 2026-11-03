@@ -203,8 +203,9 @@ jobs:
           # (hostdir/binpkgs), not from this arch subdir. Index the seed
           # there so a published runtime dep is not rebuilt from source.
           mkdir -p ..
-          cp -f ./*.xbps ../
-          ( cd .. && xbps-rindex -a ./*.xbps >/dev/null )
+          ln -f ./*.xbps ../
+          chown builder:builder ../*.xbps
+          ( cd .. && sudo -u builder xbps-rindex -a ./*.xbps >/dev/null )
           if [ "${{ inputs.resign }}" = "true" ]; then
             echo "resign requested: wiping old signatures and repodata"
             rm -f *.sig2 *.sig *-repodata*
