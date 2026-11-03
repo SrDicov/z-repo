@@ -14,7 +14,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 gh api "repos/$REPO/releases/tags/$TAG" --paginate --jq '.assets[].name' \
   | sort -u > "$tmp/assets"
-repodata=$(grep -E -- '^[a-z0-9_]+-repodata$' "$tmp/assets" | head -1)
+repodata=$(grep -E -- '^[a-z0-9_-]+-repodata$' "$tmp/assets" | head -1)
 if [ -z "$repodata" ]; then
   echo "no repodata asset in release $REPO@$TAG"
   exit 1

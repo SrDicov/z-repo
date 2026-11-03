@@ -224,29 +224,26 @@ jobs:
 
       # The seeded library packages still have to be visible to pkg-config and
       # the linker, which look at the build root, not at the masterdir. Install
-      # the source-built ones (-bin packages are applications, never build
-      # dependencies, and they are large) into the container root. Individual
-      # failures must not abort the job: one stale name is not worth losing
-      # every build.
+      # only development and library packages (179MB) into the container root,
+      # avoiding multi-gigabyte browser/app binaries (Brave, OnlyOffice, etc.)
+      # that exhaust runner disk space.
       - name: Make seeded libraries visible to the build
         continue-on-error: true
         run: |
           set -u
-          seed=/var/cache/zrepo-seed
-          rm -rf "$seed"
-          mkdir -p "$seed"
-          cp -f z-packages/hostdir/binpkgs/x86_64/*.xbps "$seed"/ 2>/dev/null || true
-          rm -f "$seed"/*-bin-* "$seed"/*.sig2
-          ( cd "$seed" && sudo xbps-rindex -a ./*.xbps )
-          # xbps-src installs target deps into the masterdir, and CMake never passes
-          # LDFLAGS to the linker, so a pkg-config "-lfoo" can only resolve if the
-          # library sits in the root the build actually sees: the container root
-          # natively, the masterdir inside the chroot. Unpack into both.
-          for f in "$seed"/*.xbps; do
-            sudo bsdtar -xpf "$f" -C /
-            # as builder: xbps-src writes into the masterdir as builder, and
-            # root-owned dirs there break the next unpack with EACCES
-            sudo -Eu builder bsdtar -xpf "$f" -C z-packages/masterdir-x86_64
+          for f in z-packages/hostdir/binpkgs/x86_64/*-devel*.xbps \
+                   z-packages/hostdir/binpkgs/x86_64/lib*.xbps \
+                   z-packages/hostdir/binpkgs/x86_64/aquamarine*.xbps \
+                   z-packages/hostdir/binpkgs/x86_64/hypr*.xbps \
+                   z-packages/hostdir/binpkgs/x86_64/scenefx*.xbps \
+                   z-packages/hostdir/binpkgs/x86_64/sdbus*.xbps; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *hyprland-0*|*hyprland-devel-0*) ;; # core hyprland is needed
+              *hyprland-preview*|*hypridle*|*hyprsunset*|*hyprpolkitagent*) continue ;; # skip standalone tools
+            esac
+            sudo bsdtar -xpf "$f" -C / 2>/dev/null || true
+            sudo -Eu builder bsdtar -xpf "$f" -C z-packages/masterdir-x86_64 2>/dev/null || true
           done
           sudo ldconfig
 
