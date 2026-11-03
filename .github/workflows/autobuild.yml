@@ -199,6 +199,12 @@ jobs:
             cp -v "$GITHUB_WORKSPACE"/x86_64/*.xbps . 2>/dev/null || true
           fi
           ls *.xbps 2>/dev/null | wc -l
+          # xbps-src resolves runtime deps from the local repo root
+          # (hostdir/binpkgs), not from this arch subdir. Index the seed
+          # there so a published runtime dep is not rebuilt from source.
+          mkdir -p ..
+          cp -f ./*.xbps ../
+          ( cd .. && xbps-rindex -a ./*.xbps >/dev/null )
           if [ "${{ inputs.resign }}" = "true" ]; then
             echo "resign requested: wiping old signatures and repodata"
             rm -f *.sig2 *.sig *-repodata*
@@ -276,7 +282,7 @@ jobs:
               # autodeps removal transaction fail after the package was
               # already created (only line: "Transaction failed"). Accept the
               # build only when the .xbps is new and that is the sole error.
-              pkgfile=$(ls -t z-packages/hostdir/binpkgs/$pkg-*.xbps 2>/dev/null | head -n 1)
+              pkgfile=$(ls -t z-packages/hostdir/binpkgs/$pkg-*.xbps 2>/dev/null | head -n 1 || true)
               if [ -n "$pkgfile" ] && [ "$pkgfile" -nt "$marker" ] \
                    && grep -q 'ERROR: Transaction failed' "z-packages/logs/$pkg.log"; then
                 echo "WARN $pkg: only the autodeps teardown failed; package was created"
@@ -289,16 +295,16 @@ jobs:
                 failed="$failed $pkg"
               fi
             fi
+            # move built packages now: a later failure must not strand
+            # them in the repo root, where publish.sh does not look
+            if ls z-packages/hostdir/binpkgs/$pkg-*.xbps 1>/dev/null 2>&1; then
+              mv z-packages/hostdir/binpkgs/$pkg-*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
+              mv z-packages/hostdir/binpkgs/$pkg-*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
+            fi
           done
           [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
           if [ -n "$failed" ]; then
             echo "FAILED packages:$failed (publishing partial results anyway)"
-          fi
-          # never exit 1 here: publish runs on always() and reports after
-          # native builds land in hostdir/binpkgs/ top level: move to x86_64/
-          if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
-            mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
-            mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64/ 2>/dev/null || true
           fi
 
       - name: Publish to release (always, even on build failure)
