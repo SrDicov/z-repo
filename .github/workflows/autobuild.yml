@@ -32,6 +32,18 @@ on:
         default: 'false'
         type: choice
         options: ['false', 'true']
+      fail_on_build_error:
+        description: 'Fail the job when any package build fails (default keeps current behavior; publish still runs)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      fail_on_fetch_error:
+        description: 'Fail the job when failures are only transient distfile fetch/network errors (requires fail_on_build_error=true)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
   schedule:
     - cron: '0 3 * * *' # daily: poll z-packages
   repository_dispatch:
@@ -258,6 +270,9 @@ jobs:
           echo "Packages to build: $PKGS"
           ls -l /usr/lib/libhyprutils* 2>&1 || echo "PROBE: libhyprutils gone"
           failed=""
+          failed_fetch=""
+          failed_other=""
+          fetch_pattern='xbps-fetch: failed to fetch|Gateway Time-out|Connection timed out|Operation timed out|Could not resolve host|HTTP/[0-9.]+ 50[234]|Failed to connect|SSL|Temporary failure|transfer closed|recv failure'
           for pkg in $PKGS; do
             # symlinked subpackage dirs are built via their parent: skip
             if [ -L "z-packages/srcpkgs/$pkg" ]; then
@@ -265,7 +280,10 @@ jobs:
               continue
             fi
             if [ ! -d "z-packages/srcpkgs/$pkg" ]; then
-              echo "FAIL $pkg (no such template)"; failed="$failed $pkg"; continue
+              echo "FAIL $pkg (no such template)"
+              failed="$failed $pkg"
+              failed_other="$failed_other $pkg"
+              continue
             fi
             echo "=== Building $pkg (x86_64) ==="
             # Full log per package (uploaded as an artifact). On failure print
@@ -273,9 +291,15 @@ jobs:
             # with [DEBUG] remove lines and hides the cause.
             mkdir -p z-packages/logs
             marker="z-packages/.build-start-$pkg"
-            touch "$marker"
-            if ! sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg" \
-                 > "z-packages/logs/$pkg.log" 2>&1; then
+            ok=no
+            last_was_fetch=no
+            for attempt in 1 2 3; do
+              touch "$marker"
+              if sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg" \
+                   > "z-packages/logs/$pkg.log" 2>&1; then
+                ok=yes
+                break
+              fi
               # Known xbps-src teardown bug: the seeded masterdir makes the
               # autodeps removal transaction fail after the package was
               # already created (only line: "Transaction failed"). Accept the
@@ -284,13 +308,36 @@ jobs:
               if [ -n "$pkgfile" ] && [ "$pkgfile" -nt "$marker" ] \
                    && grep -q 'ERROR: Transaction failed' "z-packages/logs/$pkg.log"; then
                 echo "WARN $pkg: only the autodeps teardown failed; package was created"
+                ok=yes
+                break
+              fi
+              # Retry only on transient-looking fetch/download/network failures.
+              # Real compile/template errors are not retried.
+              if grep -Eq "$fetch_pattern" "z-packages/logs/$pkg.log"; then
+                last_was_fetch=yes
+                if [ "$attempt" -lt 3 ]; then
+                  delay=$((20 * 3 ** (attempt - 1))) # 20s, 60s
+                  echo "WARN $pkg: transient fetch/network failure (attempt $attempt), retrying in ${delay}s"
+                  sleep "$delay"
+                  continue
+                fi
               else
-                echo "FAIL $pkg"
-                grep -nE "ERROR|error:|FAIL|not found|No such file|undefined reference|cannot" \
-                  "z-packages/logs/$pkg.log" | head -40 || true
-                echo "--- last 40 lines ---"
-                tail -n 40 "z-packages/logs/$pkg.log" || true
-                failed="$failed $pkg"
+                last_was_fetch=no
+              fi
+              break
+            done
+            if [ "$ok" != yes ]; then
+              echo "FAIL $pkg"
+              grep -nE "ERROR|error:|FAIL|not found|No such file|undefined reference|cannot" \
+                "z-packages/logs/$pkg.log" | head -40 || true
+              echo "--- last 40 lines ---"
+              tail -n 40 "z-packages/logs/$pkg.log" || true
+              failed="$failed $pkg"
+              if [ "$last_was_fetch" = yes ]; then
+                failed_fetch="$failed_fetch $pkg"
+                echo "::warning::Package $pkg failed due to a fetch/network error after retries (often transient upstream/distfile issue; template/distfile may also need updating in z-packages)"
+              else
+                failed_other="$failed_other $pkg"
               fi
             fi
             # move built packages now: a later failure must not strand
@@ -301,8 +348,13 @@ jobs:
             fi
           done
           [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          if [ -n "$failed" ]; then
-            echo "FAILED packages:$failed (publishing partial results anyway)"
+          [ -z "$failed_fetch" ] || echo "failed_fetch=$failed_fetch" >> "$GITHUB_OUTPUT"
+          [ -z "$failed_other" ] || echo "failed_other=$failed_other" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed_other" ]; then
+            echo "::error::FAILED packages (build/template/other):$failed_other (publishing partial results anyway)"
+          fi
+          if [ -n "$failed_fetch" ]; then
+            echo "::warning::FAILED packages (fetch/network):$failed_fetch (publishing partial results anyway)"
           fi
 
       - name: Publish to release (always, even on build failure)
@@ -315,7 +367,36 @@ jobs:
         run: |
           bash .github/scripts/publish.sh z-packages/hostdir/binpkgs/x86_64
           failed="${{ steps.build.outputs.failed }}"
-          [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
+          failed_fetch="${{ steps.build.outputs.failed_fetch }}"
+          failed_other="${{ steps.build.outputs.failed_other }}"
+          if [ -n "$failed" ]; then
+            echo "::notice::Partial publish completed. Failed packages:$failed"
+            [ -z "$failed_fetch" ] || echo "::notice::Fetch/network failures:$failed_fetch"
+            [ -z "$failed_other" ] || echo "::notice::Non-fetch failures:$failed_other"
+            fail_on_err="${{ inputs.fail_on_build_error }}"
+            fail_on_fetch="${{ inputs.fail_on_fetch_error }}"
+            [ -n "$fail_on_err" ] || fail_on_err="true"
+            [ -n "$fail_on_fetch" ] || fail_on_fetch="true"
+            if [ "$fail_on_err" != "true" ]; then
+              echo "::warning::fail_on_build_error=false; exiting successfully despite failed packages"
+              exit 0
+            fi
+            if [ -z "$failed_other" ] && [ -n "$failed_fetch" ] && [ "$fail_on_fetch" != "true" ]; then
+              echo "::warning::Only fetch/network failures occurred and fail_on_fetch_error=false; exiting successfully after partial publish"
+              exit 0
+            fi
+            echo "::error::FAILED packages:$failed (partial results published)"
+            exit 1
+          fi
+
+      - name: Upload build logs (always)
+        if: always() && inputs.sync_only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: z-packages/logs/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Save xbps caches (always, even on failure)
         if: always()

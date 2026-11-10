@@ -17,8 +17,14 @@ cada `pkgname` y se borran del release los assets viejos.
 
 Disparadores: diario (`0 3 * * *`), push a `.github/**`, `keys/` o docs,
 `repository_dispatch` (`z-packages-update`) y manual con `packages=` (coma/espacio, vacío =
-auto-detectar), `sync_only=true` (solo re-firmar `repodata` y republicar)
-o `force=true` (todo).
+auto-detectar), `sync_only=true` (solo re-firmar `repodata` y republicar),
+`force=true` (todo), `fail_on_build_error=false` (no fallar aunque algún
+paquete falle tras publicar lo construido) y `fail_on_fetch_error=false`
+(no fallar si los únicos fallos son de descarga/fetch de distfiles tras
+reintentos, manteniendo el fallo ante errores de compilación/template).
+Los fallos de fetch se distinguen en logs/anotaciones; una URL de distfile
+rota o desactualizada normalmente requiere corregir la plantilla en
+`z-packages`.
 
 ### Concurrencia
 
